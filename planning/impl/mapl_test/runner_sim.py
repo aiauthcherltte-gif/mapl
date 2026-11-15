@@ -9,7 +9,8 @@ from .canonical import approval_challenge, canonical_bytes, parse_json
 from .config import Profile
 from .errors import Refusal
 from .request import local_request, validate
-from .state import expired, no_run_evidence, utc
+from .state import expired, no_run_evidence, utc, result_state, stamp
+from . import check_contract
 from .webauthn_verify import verify_assertion
 
 
@@ -116,6 +117,8 @@ class RunnerInstance:
         entry = self.journal.get(rid, {})
         entry.update(revision=revision, claim_id=claim_id, state=status,
                      instance_id=entry.get('instance_id', self.instance_id))
+        if status in ('check_started', 'check_result', 'recovery_intent', 'recovery_start_unconfirmed', 'recovery_result', 'result'):
+            entry.setdefault('rows', []).append({'state': status, 'at': stamp(self.clock()), 'instance_id': self.instance_id, 'evidence': copy.deepcopy(evidence)})
         if evidence is not None:
             entry['evidence'] = copy.deepcopy(evidence)
         self.journal[rid] = entry
@@ -143,6 +146,8 @@ class RunnerInstance:
     def _verify(self, envelope):
         request = envelope['request']
         validate(request, self.root)
+        if expired(request, self.clock()):
+            raise Refusal('EXPIRED')
         baseline = self.root.read_json('runner/manifests/' + request['request_id'] + '/' + str(request['revision']) + '.json')
         if canonical_bytes(request) != canonical_bytes(baseline):
             raise Refusal('CONTENT_MISMATCH')
@@ -160,7 +165,7 @@ class RunnerInstance:
             raise Refusal('ASSERTION_REFUSED')
         verify_assertion(assertion, pinned, approval_challenge(rebuilt, nonce), self.transport.origin, self.transport.rp_id)
         if expired(rebuilt, self.clock()):
-            raise Refusal('CONTENT_MISMATCH')
+            raise Refusal('EXPIRED')
         return rebuilt
 
     def _recover(self, rid, entry):
@@ -169,6 +174,8 @@ class RunnerInstance:
         # Recovery needs no new server endpoint and never substitutes a later
         # server revision for the originally checked evidence definitions.
         request = entry['request']
+        if self._restart_v2(rid, entry):
+            return
         evidence = self.kit.inspect(request, entry['claim_id'], entry['instance_id'])
         self.last_evidence = evidence
         if entry['state'] == 'claim_intent':
@@ -203,7 +210,7 @@ class RunnerInstance:
                 request = self._verify(envelope)
             except (Refusal, FileNotFoundError) as error:
                 code = error.code if isinstance(error, Refusal) else 'CONTENT_MISMATCH'
-                if code not in ('CONTENT_MISMATCH', 'pinned_key_mismatch'):
+                if code not in ('EXPIRED', 'CONTENT_MISMATCH', 'pinned_key_mismatch'):
                     code = 'ASSERTION_REFUSED' if code in ('uv_missing', 'origin_mismatch', 'challenge_mismatch', 'ASSERTION_REFUSED',
                         'signature_invalid', 'up_missing', 'rp_id_mismatch', 'unknown_credential', 'assertion_malformed',
                         'cross_origin_refused', 'type_mismatch', 'backup_flags_invalid', 'client_data_malformed') else 'CONTENT_MISMATCH'
@@ -262,7 +269,95 @@ class RunnerInstance:
             self.last_evidence = evidence
             self._journal(rid, revision, claim_id, 'result', evidence)
             self._report(rid, revision, claim_id, 'result', evidence)
+            if request['format'] == 'mapl-request/2' and result_state(evidence, request) == 'done':
+                self._check_v2(rid, revision, claim_id, request)
             self._recovered.add(rid)
+
+    def _restart_v2(self, rid, entry):
+        request = entry['request']
+        if request['format'] != 'mapl-request/2':
+            return False
+        rows = entry.get('rows', [])
+        swap = next((x for x in rows if x['state'] == 'result' and result_state(x['evidence'], request) == 'done'), None)
+        if not swap:
+            # The kit persists its own result before the runner journal write.
+            evidence = self.kit.inspect(request, entry['claim_id'], entry['instance_id'])
+            if result_state(evidence, request) != 'done':
+                return False
+            swap = {'evidence': evidence}
+        recover = any(x['state'] == 'recovery_intent' for x in rows)
+        results = [x for x in rows if x['state'] == 'check_result']
+        recovery_results = [x for x in rows if x['state'] == 'recovery_result']
+        if recovery_results:
+            event, evidence = recovery_results[-1]['evidence']['event'], recovery_results[-1]['evidence']['evidence']
+        elif recover:
+            intent = next(x for x in rows if x['state'] == 'recovery_intent')
+            event, evidence = 'recovery_unknown', {'code': intent['evidence']['code']}
+        elif results:
+            event, evidence = results[-1]['evidence']['event'], results[-1]['evidence']['evidence']
+        else:
+            event, evidence = 'check_unknown', copy.deepcopy(swap['evidence'])
+        self._report(rid, entry['revision'], entry['claim_id'], event, evidence)
+        self._recovered.add(rid)
+        return True
+
+    def _check_v2(self, rid, revision, claim_id, request):
+        self._journal(rid, revision, claim_id, 'check_started')
+        try:
+            exit_code, stderr = check_contract.check(self.root, request)
+            code = check_contract.parse_check(exit_code, stderr, check_contract.MOCK_K7)
+            facts = check_contract.MOCK_K7['codes'].get(code, {})
+            if exit_code == 0:
+                event, evidence = 'check_ok', {'pending': []}
+            elif facts.get('not_yet') is not None:
+                event, evidence = 'check_ok', {'pending': facts['not_yet']}
+            elif facts.get('definite') is True:
+                event, evidence = 'check_failed', {'code': code}
+            else:
+                event, evidence = 'check_unknown', {}
+        except (OSError, Refusal):
+            event, evidence = 'check_unknown', {}
+        rec = request['recovery']
+        if event == 'check_failed':
+            evidence['precondition'] = 'no_recovery_clause' if not rec['included_in_this_approval'] else 'code_not_in_clause'
+        if event == 'check_failed' and rec['included_in_this_approval'] and code in rec['on']:
+            entry = self.journal[rid]
+            swap = next(x for x in entry['rows'] if x['state'] == 'result')
+            current_matches = digest_pointer(self.root) == rec['only_if_current_sha256']
+            now = self.clock()
+            within_deadline = now <= utc(rec['valid_until']) and (now - utc(swap['at'])).total_seconds() <= request['check']['check_and_recover_max_s']
+            recorded = any(x['state'] == 'recovery_intent' for x in entry['rows']) or self.root.exists('runner/recovery-intents/' + rid + '.json')
+            reason = ('current_mismatch' if not current_matches else 'start_deadline' if not within_deadline else
+                      'recovery_record_exists' if recorded else 'process_changed' if entry['instance_id'] != self.instance_id else None)
+            eligible = reason is None
+            if eligible:
+                self.root.write_json('runner/recovery-intents/' + rid + '.json', {'claim_id': claim_id, 'instance_id': self.instance_id}, exclusive=True)
+                self._journal(rid, revision, claim_id, 'recovery_intent', {'code': code})
+                try:
+                    answer = self._report(rid, revision, claim_id, 'recovery_start', {'code': code})
+                    if answer is None:
+                        self._journal(rid, revision, claim_id, 'recovery_start_unconfirmed', {'code': code})
+                except ConnectionError as error:
+                    if str(error) != 'report_delivery_unconfirmed':
+                        raise
+                    self._journal(rid, revision, claim_id, 'recovery_start_unconfirmed', {'code': code})
+                try:
+                    evidence = check_contract.recover(self.root, request, claim_id, self.clock, 'recovery_intent')
+                    if evidence.get('recovery_claim_id') == claim_id and evidence.get('pointer_sha256') == rec['restore_to_sha256']:
+                        event = 'recovery_done'
+                    elif evidence.get('exit') == 'refused' and evidence.get('recovery_marker') == 'absent' and evidence.get('pointer_sha256') == rec['only_if_current_sha256']:
+                        event = 'recovery_failed'
+                    else:
+                        event = 'recovery_unknown'
+                    evidence['code'] = code
+                except (OSError, Refusal):
+                    event, evidence = 'recovery_unknown', {'code': code}
+                self._journal(rid, revision, claim_id, 'recovery_result', {'event': event, 'evidence': evidence})
+            else:
+                evidence['precondition'] = reason
+        if event.startswith('check_'):
+            self._journal(rid, revision, claim_id, 'check_result', {'event': event, 'evidence': evidence})
+        self._report(rid, revision, claim_id, event, evidence)
 
     def crash(self):
         if self._active:
@@ -274,3 +369,8 @@ class RunnerInstance:
             self.transport.stopping()
             self.root.release_runner_lock(self.instance_id)
             self._active = False
+
+
+def digest_pointer(root):
+    from .canonical import digest
+    return digest(root.read_bytes(root.pointer()))

@@ -19,7 +19,7 @@ for (const kind of ['none', 'runner', 'requester', 'expired', 'forged', 'valid']
         const valid = w.cookie;
         const headers: Record<string, string> = { Cookie: kind === 'none' || kind === 'runner' || kind === 'requester' ? '' : kind === 'forged' ? '__Host-mapl_session=' + 'a'.repeat(43) : valid };
         if (kind === 'runner' || kind === 'requester') headers.Authorization = 'Bearer ' + (kind === 'runner' ? w.bindings.RUNNER_TOKEN : w.bindings.REQUESTER_TOKEN);
-        if (kind === 'expired') w.advance(900);
+        if (kind === 'expired') w.advance(28800);
         const observations: { method: string; path: string; status: number; body: unknown; location: string | null }[] = [];
         for (const [method, path, body] of routes(w)) {
             const response = await w.http(method, path, body, headers);
@@ -33,7 +33,7 @@ for (const kind of ['none', 'runner', 'requester', 'expired', 'forged', 'valid']
             if (kind !== 'valid') {
                 const html = response.method === 'GET' && !response.path.startsWith('/api/');
                 expect(response.status, response.path).toBe(html ? 303 : 401);
-                if (html) expect(response.location, response.path).toBe('/login');
+                if (html) expect(response.location, response.path).toBe('/login' + (response.path.startsWith('/r/') ? '#' + response.path : ''));
                 else expect(response.body, response.path).toEqual({ error: 'session_required' });
             } else {
                 expect(response.status, response.path).not.toBe(401);
@@ -47,7 +47,7 @@ it('W5b missing session wins over forged Origin, token, malformed body and spoof
         const r = await w.http(method, path, method === 'POST' ? '{invalid' : undefined,
             { Cookie: '', Origin: 'http://evil', Host: 'evil', 'X-Authenticated-User': 'owner', Authorization: 'Bearer fake' });
         if (method === 'GET' && !path.startsWith('/api/')) {
-            expect(r.status, path).toBe(303); expect(r.headers.get('Location')).toBe('/login');
+            expect(r.status, path).toBe(303); expect(r.headers.get('Location')).toBe('/login' + (path.startsWith('/r/') ? '#' + path : ''));
         } else { expect(r.status, path).toBe(401); expect(await r.json()).toEqual({ error: 'session_required' }); }
     }
 }));
@@ -58,12 +58,13 @@ it('W5b real UV login sets hardened cookie and persists revocable server session
     const r = await w.http('POST', '/api/login/verify', { challenge: o.challenge, credential: assertion });
     expect(r.status).toBe(200);
     const set = r.headers.get('Set-Cookie')!;
-    for (const flag of ['HttpOnly', 'Secure', 'SameSite=Strict', 'Path=/', 'Max-Age=900']) expect(set).toContain(flag);
+    for (const flag of ['HttpOnly', 'Secure', 'SameSite=Strict', 'Path=/', 'Max-Age=86400']) expect(set).toContain(flag);
     const cookie = set.split(';')[0], sid = cookie.split('=')[1];
     expect(w.store.meta('session:' + sid)).toMatchObject({ revoked: false, credential_id: w.auth.id });
     w.store = w.instance.store = new Store(w.store.storage, w.bindings, () => w.clock.now);
     expect((await w.http('GET', '/api/requests', undefined, { Cookie: cookie })).status).toBe(200);
-    expect((await w.http('POST', '/api/logout', {}, { Cookie: cookie })).status).toBe(200);
+    const lo = await w.store.managementOptions(sid, 'logout', sid);
+    expect((await w.http('POST', '/api/logout', {action_id: lo.action_id, credential: await w.auth.assertion(b64decode(lo.challenge))}, { Cookie: cookie })).status).toBe(200);
     expect((await w.http('GET', '/api/requests', undefined, { Cookie: cookie })).status).toBe(401);
     await refuses('login_challenge_invalid', () => w.store.login(o.challenge, assertion));
 }));
@@ -121,7 +122,7 @@ it('W5b credential addition is bound to session and expires, and session is rech
     const sid = await w.store.login(other.challenge, await w.auth.assertion(b64decode(other.challenge)));
     await refuses('credential_add_invalid', async () => w.store.credentialAddVerify(sid, o.action_id, await w.auth.assertion(b64decode(approval.challenge))));
     const a = await w.auth.assertion(b64decode(approval.challenge)), verify = w.store.verifier;
-    w.store.verifier = async (...args) => { const facts = await verify(...args); w.store.logout(w.session); return facts; };
+    w.store.verifier = async (...args) => { const facts = await verify(...args); w.store.putMeta('session:' + w.session, {...w.store.meta<Dict>('session:' + w.session), revoked: true}); return facts; };
     await refuses('session_required', () => w.store.credentialAddVerify(w.session, o.action_id, a));
     expect(w.store.credentialSummary().credential_count).toBe(1);
 }));
@@ -178,7 +179,7 @@ it('W5b expired credential_add and per-action approval after logout commit no ne
     w.advance(180); await refuses('credential_add_invalid', () => w.store.credentialAddVerify(w.session, o.action_id, assertion));
     expect(w.store.credentialSummary().credential_count).toBe(1);
     const a = await w.sign(), verify = w.store.verifier;
-    w.store.verifier = async (...args) => { const facts = await verify(...args); w.store.logout(w.session); return facts; };
+    w.store.verifier = async (...args) => { const facts = await verify(...args); w.store.putMeta('session:' + w.session, {...w.store.meta<Dict>('session:' + w.session), revoked: true}); return facts; };
     await refuses('session_required', () => w.store.approve(w.rid, a, 1, w.session));
     expect(w.record().approval).toBe('pending'); expect(w.store.entry(w.rid).options?.used).toBe(false);
 }));

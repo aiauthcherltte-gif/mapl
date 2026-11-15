@@ -1,5 +1,11 @@
+import { FLOW_EVENTS } from './scope';
+import { flow, flowText } from './flow';
 import { clone, need, Refusal, type Dict, type MaplRequest } from './types';
 export interface State {
+    checking_at?: string;
+    check_reported_unknown?: boolean;
+    recovery_at?: string;
+    pending?: string[];
     approval: string;
     execution: string;
     claim_id: string | null;
@@ -7,9 +13,10 @@ export interface State {
     started_at: string | null;
     result_code?: string;
 }
-export const FINAL_EXECUTION = new Set(['done', 'failed_no_change', 'failed_after_marker', 'not_run', 'expired_not_run']);
+export const FINAL_EXECUTION = new Set(['done', 'check_failed', 'check_unknown', 'recovered', 'recovery_refused', 'failed_no_change', 'failed_after_marker', 'not_run', 'expired_not_run']);
 const EXPLICIT_REFUSALS = new Set(['EXPIRED', 'WINDOW_NOT_OPEN', 'POINTER_BEFORE_MISMATCH', 'KIT_LOCKED', 'REFUSED']);
-export const PROPERTY_EVENTS = ['approve', 'decline', 'cancel', 'revise', 'claim_same', 'claim_other', 'start_ok', 'start_wrong', 'result_done', 'result_no_change', 'result_after_marker', 'result_partial', 'result_other', 'not_run_full', 'not_run_empty', 'tick_15m', 'tick_24h'];
+export const V1_PROPERTY_EVENTS = ['approve', 'decline', 'cancel', 'revise', 'claim_same', 'claim_other', 'start_ok', 'start_wrong', 'result_done', 'result_no_change', 'result_after_marker', 'result_partial', 'result_other', 'not_run_full', 'not_run_empty', 'tick_15m', 'tick_24h'];
+export const PROPERTY_EVENTS = [...V1_PROPERTY_EVENTS, ...FLOW_EVENTS, 'withdraw'];
 export function utc(v: unknown): number {
     need(typeof v === 'string', 'request_invalid');
     const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?Z$/.exec(v);
@@ -36,6 +43,11 @@ export const noRunEvidence = (e: Dict, r: MaplRequest) => e.marker === 'absent' 
 export function transition(previous: State, event: string, e: Dict, now: number, r: MaplRequest): State {
     const c = clone(previous), { execution, approval } = c;
     if (event.startsWith('tick')) {
+        if (['checking', 'recovering'].includes(execution)) {
+            const since = execution === 'checking' ? c.checking_at : c.recovery_at;
+            if (since && now - utc(since) >= 900000) c.execution = execution === 'checking' && !r.recovery.included_in_this_approval ? 'check_unknown' : 'unknown';
+            return c;
+        }
         if (['claimed', 'running'].includes(execution)) {
             const since = execution === 'running' ? c.started_at : c.claimed_at;
             if (since && now - utc(since) >= 900000)
@@ -55,6 +67,14 @@ export function transition(previous: State, event: string, e: Dict, now: number,
         need(approval === 'pending', 'already_' + approval, 409);
         need(!expired(r, now), 'expired', 409);
         c.approval = 'approved';
+    }
+    else if (event === 'withdraw') {
+        need(approval === 'approved' && execution === 'not_started' && !c.claim_id, 'withdraw_refused', 409);
+        c.approval = 'withdrawn';
+    }
+    else if (FLOW_EVENTS.includes(event)) {
+        if (['check_ok', 'check_failed', 'check_unknown'].includes(event) && ['claimed', 'running', 'unknown'].includes(c.execution) && resultState(e, r) === 'done') { c.execution = 'checking'; c.checking_at = stamp(now); }
+        return flow(c, event, e, now, r);
     }
     else if (event === 'decline') {
         need(approval === 'pending' && !c.claim_id, 'not_pending', 409);
@@ -84,7 +104,10 @@ export function transition(previous: State, event: string, e: Dict, now: number,
             c.execution = 'not_run';
         }
         else
+            {
             c.execution = resultState(e, r);
+            if (r.format === 'mapl-request/2' && c.execution === 'done') { c.execution = 'checking'; c.checking_at = stamp(now); }
+        }
     }
     else
         throw new Refusal('event_refused');
@@ -93,7 +116,9 @@ export function transition(previous: State, event: string, e: Dict, now: number,
 export function display(c: State, r: MaplRequest, now: number): string {
     const a = c.approval, e = c.execution;
     if (!['approved', 'expired'].includes(a))
-        return ({ pending: '승인 대기', declined: '거절됨 · 실행하지 않습니다.', superseded: '내용 변경으로 무효', cancelled: '요청자 철회' } as Dict)[a] ?? '만료';
+        return ({ pending: '승인 대기', declined: '거절됨 · 실행하지 않습니다.', superseded: '내용 변경으로 무효', withdrawn: '승인 철회 · 실행하지 않습니다', cancelled: '요청자 철회' } as Dict)[a] ?? '만료';
+    const v2text = flowText(c, r);
+    if (v2text) return v2text;
     if (e === 'not_started')
         return now < utc(r.window_utc[0]) ? '아직 실행 안 함 · 실행 가능 시간 ' + hm(r.window_utc[0]) + '부터' : '아직 실행 안 함 · Mac이 이 요청을 맡지 않았습니다';
     if (e === 'running')

@@ -130,7 +130,7 @@ def transitions(base):
     for depth in range(1, 5):
         next_frontier = []
         for sequence, previous, at in frontier:
-            for event_index, event in enumerate(state.PROPERTY_EVENTS):
+            for event_index, event in enumerate(state.V1_PROPERTY_EVENTS):
                 later = at + timedelta(seconds=900 if event == 'tick_15m' else 86400 if event == 'tick_24h' else 0)
                 result = outcome(state.transition, previous, event, state.property_evidence(event, base), later, base)
                 current = result['value'] if result['accepted'] else previous
@@ -138,7 +138,7 @@ def transitions(base):
                 rows.append({'sequence': path, 'node': intern(current, later), 'reason': result.get('reason')})
                 next_frontier.append((path, current, later))
         frontier = next_frontier
-    return {'events': list(state.PROPERTY_EVENTS), 'max_length': 4, 'nodes': nodes,
+    return {'events': list(state.V1_PROPERTY_EVENTS), 'max_length': 4, 'nodes': nodes,
             'sequences': rows, 'rejection_semantics': 'state unchanged; event time still advances'}
 
 
@@ -179,7 +179,7 @@ def main():
         'canonical_fixed_cases': 7, 'refusal_fixed_cases': 2,
         'canonical_cases': len(canonical_cases()), 'challenge_cases': 10,
         'request_cases': len(request_cases(base)), 'state_sequences': len(table['sequences']),
-        'state_nodes': len(table['nodes']), 'events': len(state.PROPERTY_EVENTS)})
+        'state_nodes': len(table['nodes']), 'events': len(state.V1_PROPERTY_EVENTS)})
     print(json.dumps(hashes, sort_keys=True))
 
 

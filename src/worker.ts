@@ -3,7 +3,7 @@ import { type Env, type DOState } from './platform';
 import { Store } from './store';
 import { roleEqual } from './secrets';
 import { validProfile } from './profile';
-import { confirm, view } from './ui';
+import { view } from './ui';
 import { need, Refusal, type Dict } from './types';
 import INDEX from '../public/index.html';
 import APP from '../public/app.js.txt';
@@ -67,6 +67,7 @@ export class MaplApproval {
             if (method === 'GET' && (['/login', '/register', '/', '/history', '/credential-add'].includes(path) || /^\/r\/[0-9a-f]{32}$/.test(path))) {
                 if (path.startsWith('/r/'))
                     this.store.get(path.slice(3));
+                if (session) this.store.touch(session);
                 return new Response(INDEX, { headers: { ...HEADERS, 'Content-Type': 'text/html; charset=utf-8' } });
             }
             if (method === 'GET' && ['/static/app.js', '/static/app.css'].includes(path))
@@ -74,7 +75,7 @@ export class MaplApproval {
             if (method === 'GET' && path === '/version') return new Response(canonical({ mode: this.env.MODE, operational: false, test_root_id: this.env.TEST_ROOT_ID, commit: /^[0-9a-f]{40}$/.test(this.env.BUILD_COMMIT ?? '') ? this.env.BUILD_COMMIT : null, registration: this.store.activeCredentials().length ? 'closed' : this.store.clock() < (this.store.meta<number>('setup_until') ?? 0) && typeof this.env.SETUP_CODE === 'string' && this.env.SETUP_CODE.length >= 10 ? 'code_required' : 'closed' }), { headers: HEADERS });
             const body = (raw ? parseJson(raw) : {}) as Dict;
             need(body && typeof body === 'object' && !Array.isArray(body), 'body_malformed');
-            const match = /^\/api\/requests\/([0-9a-f]{32})(?:\/(approve\/options|approve\/verify|decline|history))?$/.exec(path);
+            const match = /^\/api\/requests\/([0-9a-f]{32})(?:\/(approve\/options|approve\/verify|decline|withdraw|history))?$/.exec(path);
             let result: unknown;
             if (method === 'GET' && match && (!match[2] || match[2] === 'history'))
                 result = this.record(match[1]);
@@ -89,8 +90,8 @@ export class MaplApproval {
                     result = this.record(match[1]);
                 }
                 else {
-                    need(match[2] === 'decline', 'route_not_found', 404);
-                    this.store.decline(match[1]);
+                    need(['decline', 'withdraw'].includes(match[2]), 'route_not_found', 404);
+                    if (match[2] === 'withdraw') this.store.withdraw(match[1]); else this.store.decline(match[1]);
                     result = this.record(match[1]);
                 }
             }
@@ -101,10 +102,13 @@ export class MaplApproval {
             else if (method === 'POST' && path === '/api/login/options') result = this.store.loginOptions();
             else if (method === 'POST' && path === '/api/login/verify') {
                 const value = await this.store.login(body.challenge, body.credential);
-                return new Response(canonical({ ...this.store.credentialSummary(), authenticated: true }), { headers: { ...HEADERS, 'Set-Cookie': '__Host-mapl_session=' + value + '; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=900' } });
+                return new Response(canonical({ ...this.store.credentialSummary(), authenticated: true }), { headers: { ...HEADERS, 'Set-Cookie': '__Host-mapl_session=' + value + '; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=' + this.store.cookieAge(value) } });
             }
+            else if (method === 'POST' && path === '/api/logout/options') result = await this.store.managementOptions(session!, 'logout', session!);
+            else if (method === 'POST' && path === '/api/session-revoke/options') result = await this.store.managementOptions(session!, 'session_revoke', body.target);
+            else if (method === 'POST' && path === '/api/session-revoke/verify') { await this.store.manage(session!, body.action_id, 'session_revoke', body.target, body.credential); result = {revoked: true}; }
             else if (method === 'POST' && path === '/api/logout') {
-                this.store.logout(session!);
+                await this.store.manage(session!, body.action_id, 'logout', session!, body.credential);
                 return new Response(canonical({ authenticated: false }), { headers: { ...HEADERS, 'Set-Cookie': '__Host-mapl_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0' } });
             }
             else if (method === 'GET' && path === '/api/requests') result = this.store.list();
@@ -130,14 +134,17 @@ export class MaplApproval {
                 result = this.store.cancel(body.request_id);
             else
                 throw new Refusal('route_not_found', 404);
-            if (session) this.store.requireSession(session);
+            if (session) {
+                this.store.requireSession(session);
+                if (method === 'POST' || !path.startsWith('/api/')) this.store.touch(session);
+            }
             return new Response(canonical(result), { headers: HEADERS });
         }
         catch (e) {
             const path = new URL(req.url).pathname;
             if (e instanceof Refusal && e.code === 'session_required' && req.method === 'GET' &&
                 (['/', '/history', '/credential-add'].includes(path) || /^\/r\/[0-9a-f]{32}$/.test(path)))
-                return new Response(null, { status: 303, headers: { ...HEADERS, Location: '/login' } });
+                return new Response(null, { status: 303, headers: { ...HEADERS, Location: '/login' + (/^\/r\/[0-9a-f]{32}$/.test(path) ? '#' + path : '') } });
             if (e instanceof Refusal)
                 return new Response(canonical({ error: e.code }), { status: e.status, headers: HEADERS });
             if (e instanceof TypeError)
@@ -145,6 +152,6 @@ export class MaplApproval {
             throw e;
         }
     }
-    record(rid: string): Dict { const r = this.store.get(rid); return { ...r, view: view(r, this.store.clock()), confirmation: confirm(r, this.env.ORIGIN), test_scenario: 'normal' }; }
+    record(rid: string): Dict { const r = this.store.get(rid); return { ...r, view: view(r, this.store.clock()), site_host: new URL(this.env.ORIGIN).host, test_scenario: 'normal' }; }
 }
 export default { fetch(req: Request, env: Env): Promise<Response> { return env.APPROVAL.get(env.APPROVAL.idFromName('mapl-approval-local-test')).fetch(req); } };

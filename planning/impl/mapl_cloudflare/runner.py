@@ -77,6 +77,8 @@ class MacRunner(RunnerInstance):
     def _recover(self, rid, entry):
         # Takeover leaves records intact; recovery updates only the mutable journal.
         request = entry['request']
+        if self._restart_v2(rid, entry):
+            return
         evidence = self.kit.inspect(request, entry['claim_id'], entry['instance_id'])
         self.last_evidence = evidence
         if entry['state'] == 'claim_intent' or no_run_evidence(evidence, request):

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { world, refuses, CID } from './support';
-import { initial, transition, propertyEvidence, PROPERTY_EVENTS } from '../src/state';
+import { initial, transition, propertyEvidence, V1_PROPERTY_EVENTS } from '../src/state';
 import { canonical } from '../src/canonical';
 import { Refusal } from '../src/types';
 describe('ported ST server cases', () => {
@@ -16,12 +16,12 @@ describe('ported ST server cases', () => {
     it('ST-7 not_run requires evidence', () => world(async (w) => { await w.approve(); w.claim(); await refuses('insufficient_not_run_evidence', () => w.report('not_run')); w.advance(900); expect(w.record().execution).toBe('unknown'); }));
     it('ST-8 elapsed time cannot resolve uncertainty', () => world(async (w) => { await w.approve(); w.claim(); w.advance(900); expect(w.record().execution).toBe('unknown'); w.advance(86400); expect(w.record().execution).toBe('unknown'); }));
     it('ST-9 complete event alphabet through depth six never resets execution', () => world(w => {
-        expect(PROPERTY_EVENTS).toHaveLength(17);
+        expect(V1_PROPERTY_EVENTS).toHaveLength(17);
         let frontier = [{ s: initial(), now: w.clock.now, ever: false }];
         for (let depth = 0; depth < 6; depth++) {
             const next = new Map<string, typeof frontier[0]>();
             for (const p of frontier)
-                for (const e of PROPERTY_EVENTS) {
+                for (const e of V1_PROPERTY_EVENTS) {
                     const now = p.now + (e === 'tick_15m' ? 900000 : e === 'tick_24h' ? 86400000 : 0);
                     let s = p.s;
                     try {

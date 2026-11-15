@@ -10,11 +10,11 @@ function rows(w: World, prefix: string): { key: string; json: string }[] {
 it('W5FR L1r HTML GET routes redirect invalid sessions to login; APIs keep 401 JSON', () => world(async w => {
     const pages = ['/', '/r/' + w.rid, '/history', '/credential-add'];
     for (const cookie of ['', '__Host-mapl_session=' + 'x'.repeat(43), w.cookie]) {
-        if (cookie === w.cookie) w.advance(900);
+        if (cookie === w.cookie) w.advance(28800);
         for (const path of pages) {
             const r = await w.http('GET', path, undefined, { Cookie: cookie });
             expect(r.status, path).toBe(303);
-            expect(r.headers.get('Location')).toBe('/login');
+            expect(r.headers.get('Location')).toBe('/login' + (path.startsWith('/r/') ? '#' + path : ''));
             expect(r.headers.get('Cache-Control')).toBe('no-store');
             expect(await r.text()).not.toContain(w.rid);
         }
@@ -39,7 +39,7 @@ it('W5FR L1r redirect applies only to HTML GET routes', () => world(async w => {
 
 it('W5FR L3r HTTP logout during held approval verification leaves pending and nonce unused', () => world(async w => {
     const assertion = await w.sign(), verify = w.store.verifier;
-    const credentialBefore = canonical(w.store.credential(w.auth.id));
+    let credentialBefore = canonical(w.store.credential(w.auth.id));
     let reached!: () => void, release!: () => void;
     const verified = new Promise<void>(resolve => reached = resolve), held = new Promise<void>(resolve => release = resolve);
     w.store.verifier = async (...args) => { const facts = await verify(...args); reached(); await held; return facts; };
@@ -47,8 +47,11 @@ it('W5FR L3r HTTP logout during held approval verification leaves pending and no
     try {
         await verified;
         expect(w.record().approval).toBe('pending');
-        const logout = await w.http('POST', '/api/logout', {});
+        w.store.verifier = verify;
+        const lo = await w.store.managementOptions(w.session, 'logout', w.session);
+        const logout = await w.http('POST', '/api/logout', {action_id: lo.action_id, credential: await w.auth.assertion(b64decode(lo.challenge))});
         expect(logout.status).toBe(200);
+        credentialBefore = canonical(w.store.credential(w.auth.id));
     } finally { release(); w.store.verifier = verify; }
     const response = await approval;
     expect(response.status).toBe(401);
@@ -114,7 +117,7 @@ it('W5FR L2r failed login verification also performs bounded expired-row cleanup
 
 it('W5FR L2r cleanup preserves unexpired rows then reclaims logged-out sessions at expiry', () => world(async w => {
     const o = w.store.loginOptions();
-    w.store.logout(w.session);
+    w.store.putMeta('session:' + w.session, {...w.store.meta<Dict>('session:' + w.session), revoked: true});
     w.advance(179);
     w.store.loginOptions();
     expect(w.store.meta('login:' + o.challenge)).not.toBeNull();
@@ -123,7 +126,7 @@ it('W5FR L2r cleanup preserves unexpired rows then reclaims logged-out sessions 
     w.store.loginOptions();
     expect(w.store.meta('login:' + o.challenge)).toBeNull();
     expect(w.store.meta('session:' + w.session)).not.toBeNull();
-    w.advance(720);
+    w.advance(28620);
     w.store.loginOptions();
     expect(w.store.meta('session:' + w.session)).toBeNull();
     await refuses('session_required', () => w.store.requireSession(w.session));

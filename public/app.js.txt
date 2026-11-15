@@ -43,23 +43,32 @@ function serialized(credential) {
   return result;
 }
 function summary(value) {
-  text('passkey-summary', '등록된 패스키 ' + value.credential_count + '개 · 마지막 추가 ' + (value.credential_registered_at ? new Date(value.credential_registered_at).toLocaleString('ko-KR') : '없음'));
+  text('passkey-summary', '활성 패스키 ' + value.credential_count + '개');
 }
 function render() {
   if (!record) return;
-  summary(record);
+  el('passkey-summary').hidden = true;
+  document.querySelector('nav').hidden = true;
   const view = record.view;
-  for (const id of ['title', 'change', 'deadline', 'conditions']) text(id, view[id]);
+  for (const id of ['title', 'change', 'target', 'impact', 'scope', 'failure', 'deadline']) text(id, view[id]);
   // Avoid replacing an unchanged state node, so its mutation history is meaningful.
   const state = uncertain ? '연결 확인 중 · 서버의 현재 상태를 확인하지 못했습니다.' : view.state;
   if (el('state').textContent !== state) text('state', state);
   text('details', view.details_text);
   const pending = record.approval === 'pending' && record.execution === 'not_started';
-  el('actions').hidden = !pending || Boolean(confirming) || uncertain;
-  el('confirmation').hidden = !pending || !confirming;
-  text('confirmation-text', record.confirmation);
-  for (const id of ['approve', 'decline', 'confirm-approve', 'cancel-confirm']) el(id).disabled = busy || uncertain;
+  el('actions').hidden = !pending || uncertain;
+  text('site-host', '주소창과 비교: ' + record.site_host);
+  sizeApproval();
+  el('withdraw').hidden = uncertain || record.approval !== 'approved' || record.execution !== 'not_started' || Boolean(record.claim_id);
+  for (const id of ['approve', 'decline', 'withdraw']) el(id).disabled = busy || uncertain;
 }
+// Re-measure when host wrapping, fonts or viewport dimensions change.
+function sizeApproval() {
+  const actions = el('actions');
+  if (actions.hidden) return;
+  document.querySelector('main').style.setProperty('--approval-height', actions.getBoundingClientRect().height + 'px');
+}
+if (typeof ResizeObserver !== 'undefined') new ResizeObserver(sizeApproval).observe(el('actions'));
 async function refresh() {
   if (!requestId) return;
   const sequence = ++refreshSequence;
@@ -117,17 +126,16 @@ async function decide() {
 }
 el('approve').addEventListener('click', () => {
   if (busy || uncertain || !record || record.approval !== 'pending') return;
-  confirming = Object.freeze(binding(record)); actionError = null; text('error', ''); render();
+  confirming = Object.freeze(binding(record)); actionError = null; text('error', ''); return decide();
 });
-el('cancel-confirm').addEventListener('click', () => { if (!busy) { confirming = null; render(); } });
-el('confirm-approve').addEventListener('click', decide);
-el('decline').addEventListener('click', async () => {
+
+for (const action of ['decline', 'withdraw']) el(action).addEventListener('click', async () => {
   if (busy || uncertain) return;
   ++refreshSequence;
   busy = true;
   actionError = null;
   render();
-  try { await api('/api/requests/' + requestId + '/decline', {}); }
+  try { await api('/api/requests/' + requestId + '/' + action, {}); }
   catch (_) { uncertain = true; }
   finally {
     try { await refresh(); }
@@ -158,12 +166,12 @@ el('login').addEventListener('click', async () => {
     const credential = await navigator.credentials.get(credentialsOptions(options));
     const challenge = encode(options.challenge);
     const result = await api('/api/login/verify', {challenge, credential: serialized(credential)});
-    summary(result); location.assign('/');
+    summary(result); location.assign(/^#\/r\/[0-9a-f]{32}$/.test(location.hash) ? location.hash.slice(1) : '/');
   } catch (error) { text('error', error.message || error.name); }
   finally { busy = false; el('login').disabled = false; }
 });
 el('logout').addEventListener('click', async () => {
-  try { await api('/api/logout', {}); location.assign('/login'); }
+  try { const options = await api('/api/logout/options', {}); const credential = await navigator.credentials.get(credentialsOptions({...options})); await api('/api/logout', {action_id: options.action_id, credential: serialized(credential)}); location.assign('/login'); }
   catch (error) { text('error', error.message); }
 });
 el('add-create').addEventListener('click', async () => {
@@ -193,6 +201,7 @@ else if (location.pathname === '/') {
   el('list-panel').hidden = false;
   api('/api/requests').then(result => {
     summary(result);
+    text('runner-summary', (result.last_response ? '실행기 마지막 응답 ' + result.last_response + ' · ' : '') + '켜짐·꺼짐은 이 정보만으로 알 수 없습니다');
     for (const r of result.requests) {
       const link = document.createElement('a'), row = document.createElement('p');
       link.href = '/r/' + r.request.request_id; link.textContent = '화면 자료 게시 · ' + r.display_state;
@@ -208,8 +217,9 @@ else if (location.pathname === '/') {
 } else if (location.pathname === '/register') el('registration').hidden = false;
 else {
   el('request').hidden = false;
+  el('request').insertBefore(el('band'), el('details-panel'));
   refresh().catch(() => text('error', '연결을 확인하지 못했습니다.'));
-  const active = () => record && (['claimed', 'running'].includes(record.execution) || (record.approval === 'approved' && record.execution === 'not_started'));
+  const active = () => record && (['claimed', 'running', 'checking', 'recovering'].includes(record.execution) || (record.approval === 'approved' && record.execution === 'not_started'));
   setInterval(() => { if (!busy && !document.hidden && (uncertain || active())) refresh().catch(() => text('error', '연결을 확인하지 못했습니다.')); }, 5000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden && !busy) refresh().catch(() => {}); });
   setInterval(() => {

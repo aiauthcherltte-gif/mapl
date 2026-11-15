@@ -1,0 +1,22 @@
+:root { font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif; color: #172323; background: #f2f6f5; line-height: 1.65; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+#band { padding: 10px 16px; font-size: 12px; text-align: center; background: #e5eee9; color: #345148; border-bottom: 1px solid #c8d8ce; }
+main { width: min(100%, 620px); margin: 0 auto; padding: 26px 20px 40px; }
+h1 { font-size: clamp(22px, 6vw, 29px); line-height: 1.4; letter-spacing: -.04em; margin: 0 0 26px; overflow-wrap: anywhere; }
+dl { margin: 0; }
+dt { font-size: 13px; font-weight: 600; color: #5e706c; margin-top: 22px; }
+dd { margin: 6px 0 0; overflow-wrap: anywhere; }
+#state { background: #fff; padding: 16px; border-radius: 12px; border: 1px solid #d2dfd9; }
+#actions, #confirmation { margin-top: 24px; }
+button { border: 0; border-radius: 9px; padding: 13px 18px; min-height: 48px; font: inherit; font-weight: 600; color: white; background: #186451; cursor: pointer; margin: 4px 4px 4px 0; max-width: 100%; }
+button.secondary { background: #e3eae6; color: #314a42; }
+button:disabled { opacity: .5; cursor: default; }
+button:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px solid #2474ad; outline-offset: 3px; }
+input { display: block; width: 100%; max-width: 320px; padding: 12px; margin: 8px 0 16px; font: inherit; border: 1px solid #b0c4b9; border-radius: 8px; }
+details { margin-top: 30px; border-top: 1px solid #ccdcd4; padding-top: 18px; }
+summary { cursor: pointer; color: #4c675c; }
+pre, #confirmation-text { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+pre { font-size: 12px; color: #4d6259; }
+#error { color: #9a3025; overflow-wrap: anywhere; }
+[hidden] { display: none !important; }

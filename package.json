@@ -1,0 +1,26 @@
+{
+  "name": "mapl-worker-local",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "WRANGLER_SEND_METRICS=false DO_NOT_TRACK=1 vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "node scripts/check-source.mjs",
+    "check": "npm run typecheck && npm run lint && npm test",
+    "build": "npm ci --ignore-scripts --no-audit --no-fund && node scripts/configure.mjs && node scripts/verify-local.mjs && node --test tests/deploy-tools.test.mjs",
+    "deploy": "node scripts/check-deploy.mjs && npx --no-install wrangler deploy",
+    "verify:deployed": "node scripts/verify-deployed.mjs",
+    "test:tools": "node --test tests/deploy-tools.test.mjs tests/public-exposure.test.mjs",
+    "check:public": "node scripts/check-public-exposure.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "4.42.1",
+    "@cloudflare/vitest-pool-workers": "0.9.11",
+    "vitest": "3.2.4",
+    "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "@simplewebauthn/server": "14.1.0"
+  }
+}

@@ -1,0 +1,28 @@
+name = "mapl-test"
+main = "src/worker.ts"
+compatibility_date = "2025-10-04"
+send_metrics = false
+workers_dev = true
+preview_urls = false
+[build]
+command = "node scripts/check-deploy.mjs"
+[dev]
+ip = "127.0.0.1"
+port = 8790
+[durable_objects]
+bindings = [{ name = "APPROVAL", class_name = "MaplApproval" }]
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MaplApproval"]
+[vars]
+SUBDOMAIN = "ai-auth-cherltte"
+RUNNER_TOKEN_SHA256 = "90795500328ee763fef9d9340ee49004331a480bf25667e5e32abaeb105f6ecf"
+REQUESTER_TOKEN_SHA256 = "78e5650b5aaf87ca6339b063bc3672764e504d7586834f77a69a7cafd1b354c3"
+MODE = "test"
+ORIGIN = "https://mapl-test.ai-auth-cherltte.workers.dev"
+RP_ID = "mapl-test.ai-auth-cherltte.workers.dev"
+TEST_ROOT_ID = "358aa38c4e0ecb6cd913970dea380e12"
+[[rules]]
+type = "Text"
+globs = ["**/*.html", "**/*.txt"]
+fallthrough = true

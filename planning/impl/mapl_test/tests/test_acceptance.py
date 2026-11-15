@@ -93,7 +93,7 @@ class States(Acceptance):
     def test_ST_9(self):
         # Enumerate the complete named event alphabet through length six, merging
         # equivalent states at each depth. This covers all sequences without 20^6 copies.
-        events = state.PROPERTY_EVENTS
+        events = state.V1_PROPERTY_EVENTS
         required = {'approve', 'decline', 'cancel', 'revise', 'claim_same', 'claim_other',
                     'start_ok', 'start_wrong', 'result_done', 'result_no_change',
                     'result_after_marker', 'result_partial', 'result_other',
@@ -374,7 +374,7 @@ class Isolation(Acceptance):
             self.assertNotIn('audit_ast_for_tests', sources[name])
         for rel in ('../outside.py', '/outside.py', 'server.py', 'tests/test_acceptance.py'):
             self.refuses('package_read_refused', isolation.package_bytes, rel)
-        self.assertEqual(set(isolation.RUNTIME_READS), {'mock_kit.py', 'static/index.html', 'static/app.js', 'static/app.css'})
+        self.assertEqual(set(isolation.RUNTIME_READS), {'mock_kit.py', 'check_contract.py', 'static/index.html', 'static/app.js', 'static/app.css'})
         self.refuses('package_read_refused', isolation.audit_file_for_tests, '../outside.py')
         self.refuses('package_read_refused', isolation.audit_file_for_tests, 'anything.json')
 

@@ -70,6 +70,25 @@ class TLSTests(unittest.TestCase):
         self.assertTrue(t.context.check_hostname)
         self.assertIn('server_now', t.poll())
 
+    def test_explicit_user_agent_and_auth_on_every_runner_route(self):
+        t = self.stub.transport()
+        routes = (('GET', '/api/runner/approved'), ('POST', '/api/runner/claim'),
+                  ('POST', '/api/runner/report'), ('POST', '/api/runner/stopping'))
+        with patch.object(self.stub, 'handle', wraps=self.stub.handle) as received:
+            for method, path in routes:
+                with self.subTest(path=path):
+                    self.stub.responses.append((200, {}, b'{}'))
+                    self.assertEqual(t.call(method, path, None if method == 'GET' else {}), {})
+                    actual_method, actual_path, headers, raw = received.call_args.args
+                    self.assertEqual((actual_method, actual_path), (method, path))
+                    self.assertEqual(headers['User-Agent'], 'mapl-mock-runner/1')
+                    self.assertEqual(headers['Authorization'], 'Bearer ' + t.token)
+                    self.assertEqual(headers['Content-Type'], 'application/json')
+                    self.assertEqual(headers['Host'], t.url.netloc)
+                    self.assertEqual(raw, b'' if method == 'GET' else b'{}')
+        self.assertEqual(self.stub.calls, list(routes))
+        self.assertEqual(t.origin, self.stub.origin)
+
     def test_redirect_refused_without_following(self):
         for code in (301,302,303,307,308):
             self.stub.responses.append((code, {'Location': 'https://forbidden.invalid/'}, b'not JSON'))

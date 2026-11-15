@@ -22,7 +22,7 @@ describe('ported LBL server and shared UI obligations', () => {
     it('LBL-4 contact never asserts online or offline', () => world(w => { expect(w.store.runnerStatus()).toContain('켜짐·꺼짐은 이 정보만으로 알 수 없습니다'); w.store.heartbeat(); expect(w.store.runnerStatus()).toContain('마지막 연결'); w.store.heartbeat(true); expect(w.store.runnerStatus()).toMatch(/^실행기가 꺼진다고 알림 \d\d:\d\d:\d\d$/); }));
     it('LBL-6 hashes, paths and AI prose stay in details', () => world(w => { const r = w.record(); r.request.summary_by_ai = 'reference-secret-text'; const v = view(r, w.clock.now); expect(v.default_text).not.toMatch(/[0-9a-f]{16,}|TEST_ROOT|test-screen|\.json|mock-kit|request_id|reference-secret-text/); for (const text of [w.rid, w.request.target.before_sha256, 'mock-kit/1', 'reference-secret-text'])
         expect(v.details_text).toContain(text); }));
-    it('LBL-7 conditions appear once and confirmation does not repeat', () => world(w => { const r = w.record(), v = view(r, w.clock.now); for (const word of ['되돌리기', '원장']) {
+    it('LBL-7 conditions appear once and confirmation does not repeat', () => world(w => { const r = w.record(), v = view(r, w.clock.now); for (const word of ['자동 복구', '원장']) {
         expect(v.default_text.split(word)).toHaveLength(2);
         expect(confirm(r, w.bindings.ORIGIN)).not.toContain(word);
     } }));
@@ -35,7 +35,7 @@ describe('ported LBL server and shared UI obligations', () => {
         expect(r.status).toBe(404);
     } expect(INDEX).not.toMatch(/(retry|rerun|다시 실행)[^<]*<\/button>/i); }));
     it('DP-11 gave-up report closes same claim', () => world(async (w) => { await w.approve(); w.claim(); w.report('not_run', w.evidence('not_run_full')); await refuses('claim_closed:not_run', () => w.claim()); expect(w.record().display_state).not.toContain('대기'); }));
-    it('poll queued approval/claim/running or connection uncertainty at 5 seconds; stop while hidden', () => { expect(APP).toContain("['claimed', 'running'].includes(record.execution)"); expect(APP).toContain('!document.hidden && (uncertain || active())'); expect(APP).toContain('}, 5000)'); expect(APP).not.toContain('}, 2000)'); expect(APP).toContain("document.addEventListener('visibilitychange'"); });
+    it('poll queued approval/claim/running or connection uncertainty at 5 seconds; stop while hidden', () => { expect(APP).toContain("['claimed', 'running', 'checking', 'recovering'].includes(record.execution)"); expect(APP).toContain('!document.hidden && (uncertain || active())'); expect(APP).toContain('}, 5000)'); expect(APP).not.toContain('}, 2000)'); expect(APP).toContain("document.addEventListener('visibilitychange'"); });
 });
 describe('server-authoritative refusal folding and load', () => {
     it('poll has_pending matches active requests and heartbeat writes at most once per five minutes', () => world(async (w) => {

@@ -10,7 +10,11 @@ export function readInternalNames(env=process.env) {
  return names;
 }
 export const publicBlobPins = {
- "planning/impl/mapl_cloudflare/generate_reference.py": "a91c834a51e386890926"+"a0486cf993f6582acbd2",
+ "planning/impl/mapl_cloudflare/reference/manifest-v2.json": "775dce6e6a8312363ec9"+"4b1c42fc7cbcaab485d5",
+ "planning/impl/mapl_cloudflare/reference/canonical-v2.json": "feea4644e50edf3eb555"+"9f290002297f612bc357",
+ "planning/impl/mapl_cloudflare/reference/request-v2.json": "0c619a9256ec9e971d58"+"7ccea826b5772db40543",
+ "planning/impl/mapl_cloudflare/reference/state-v2.json": "0fe5c81f146f121fcfce"+"24f637cb447184d36616",
+ "planning/impl/mapl_cloudflare/generate_reference.py": "b5012a7aea06c2fbed12"+"7da5e7c756718f05e124",
  "planning/impl/mapl_cloudflare/reference/canonical.json": "8fd8fc1dbce6278717f2"+"2832accb43cfebe645a3",
  "planning/impl/mapl_cloudflare/reference/challenge.json": "fc02849d20b4b53e482d"+"97d294549819446e29d8",
  "planning/impl/mapl_cloudflare/reference/manifest.json": "f175364df6b97dcae50d"+"773ee907039178a2d1dc",
@@ -65,7 +69,7 @@ export function check({cwd=process.cwd(),tree='HEAD',commits='HEAD',filesOnly=fa
   const ids=commits.includes('..')?git(cwd,['rev-list',commits]).toString().trim().split('\n').filter(Boolean):[git(cwd,['rev-parse','--verify',commits+'^{commit}']).toString().trim()];
   for(const id of ids){
    commitCount++;
-   const meta=git(cwd,['show','-s','--format=author-name=%an%nauthor-email=%ae%ncommitter-name=%cn%ncommitter-email=%ce',id]).toString();
+   const meta=git(cwd,['show','-s','--format=author-name=%an%nauthor-email=%ae%ncommitter-name=%cn%ncommitter-email=%ce%nmessage=%B',id]).toString();
    findings.push(...scanText(meta,'commit:'+id.slice(0,12),{metadata:true,internalNames}));
   }
  }

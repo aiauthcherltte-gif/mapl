@@ -1,3 +1,4 @@
+import { FLOW_EVENTS } from './flow';
 import { approvalChallenge, b64decode, b64encode, canonical, contentHash, digest, sha256, utf8 } from './canonical';
 import { validate } from './request';
 import { display, expired, initial, stamp, transition, utc, type State } from './state';
@@ -30,9 +31,9 @@ export interface ApprovalSnapshot {
     session?: string;
 }
 export type Verifier = typeof verifyAssertion;
-export const REFUSAL_CODES = new Set(['CONTENT_MISMATCH', 'pinned_key_mismatch', 'ASSERTION_REFUSED', 'CLOCK_SKEW']);
+export const REFUSAL_CODES = new Set(['EXPIRED', 'CONTENT_MISMATCH', 'pinned_key_mismatch', 'ASSERTION_REFUSED', 'CLOCK_SKEW']);
 const random = (length: number) => Array.from(crypto.getRandomValues(new Uint8Array(length)), v => v.toString(16).padStart(2, '0')).join('');
-const sha256Add = (id: string, candidate: Credential, nonce: string) => sha256(utf8(canonical({ format: 'mapl-approve/1', action_type: 'credential_add/1', action_id: id, credential: candidate, decision: 'approve', nonce })));
+
 const AUTH_ROWS = "(key GLOB 'login:*' OR key GLOB 'session:*')";
 // Existing login records have issued_at, while sessions already have expires_at.
 const AUTH_EXPIRY = "coalesce(json_extract(json,'$.expires_at'), json_extract(json,'$.issued_at') + 180000)";
@@ -100,6 +101,7 @@ export class Store {
     async create(input: unknown): Promise<Dict> {
         const r = validate(input, this.env.TEST_ROOT_ID), hash = await contentHash(r);
         return this.storage.transactionSync(() => {
+            if (r.format === 'mapl-request/2') need(utc(r.created_at) >= this.clock() - 300000 && utc(r.created_at) <= this.clock() + 60000, 'request_invalid', 400, 'created_at_admission');
             const latest = this.latest(r.request_id);
             if (latest !== undefined) {
                 const old = this.entry(r.request_id);
@@ -207,7 +209,7 @@ export class Store {
             need(canonical(this.credential(c.id)) === canonical(c), 'credential_revoked', 401);
             this.putMeta('login:' + challenge, { ...n, used: true });
             const session = b64encode(crypto.getRandomValues(new Uint8Array(32)));
-            this.putMeta('session:' + session, { credential_id: c.id, epoch: this.meta('epoch'), expires_at: this.clock() + 900000, revoked: false });
+            this.putMeta('session:' + session, { credential_id: c.id, epoch: this.meta('epoch'), login_at: this.clock(), absolute_deadline: this.clock() + 86400000, last_activity_at: this.clock(), idle_deadline: this.clock() + 28800000, expires_at: this.clock() + 28800000, revoked: false });
             this.saveCredential({ ...c, sign_count: facts.sign_count, be: facts.be, bs: facts.bs });
             return session;
         });
@@ -215,13 +217,60 @@ export class Store {
     requireSession(session: unknown): string {
         need(typeof session === 'string' && /^[A-Za-z0-9_-]{43}$/.test(session), 'session_required', 401);
         const s = this.meta<Dict>('session:' + session);
-        need(s && !s.revoked && s.expires_at > this.clock() && s.epoch === this.meta('epoch') && this.credential(s.credential_id), 'session_required', 401);
+        need(s && !s.revoked && s.idle_deadline > this.clock() && s.absolute_deadline > this.clock() && s.epoch === this.meta('epoch') && this.credential(s.credential_id), 'session_required', 401);
         return session;
     }
-    logout(session: string): void {
-        this.storage.transactionSync(() => { this.requireSession(session); const s = this.meta<Dict>('session:' + session)!; this.putMeta('session:' + session, { ...s, revoked: true }); });
+    touch(session: string): void {
+        this.storage.transactionSync(() => {
+            this.requireSession(session);
+            const s = this.meta<Dict>('session:' + session)!;
+            const deadline = Math.min(this.clock() + 28800000, s.absolute_deadline);
+            this.putMeta('session:' + session, {...s, last_activity_at: this.clock(), idle_deadline: deadline, expires_at: deadline});
+        });
     }
-    list(): Dict { return { ...this.credentialSummary(), requests: this.storage.sql.exec<{ rid: string }>('SELECT rid FROM latest').toArray().map(({ rid }) => this.get(rid)) }; }
+    cookieAge(session: string): number {
+        this.requireSession(session);
+        return Math.max(0, Math.floor((this.meta<Dict>('session:' + session)!.absolute_deadline - this.clock()) / 1000));
+    }
+    async managementOptions(session: string, action: string, target: string): Promise<Dict> {
+        this.requireSession(session);
+        need(['logout', 'session_revoke'].includes(action), 'action_refused');
+        if (action === 'logout') need(target === session, 'action_target_refused');
+        const id = random(16), nonce = random(32), epoch = this.meta('epoch');
+        const challenge = b64encode(await sha256(utf8(canonical({format: 'mapl-management/1', action, session, target, nonce, epoch}))));
+        return this.storage.transactionSync(() => {
+            this.requireSession(session); need(this.meta('epoch') === epoch, 'session_required', 401);
+            this.putMeta('management:' + id, {session, action, target, challenge, epoch, issued_at: this.clock(), used: false});
+            return {action_id: id, ...this.assertionOptions(challenge)};
+        });
+    }
+    async manage(session: string, id: string, action: string, target: string, assertion: Dict): Promise<void> {
+        const fresh = () => {
+            this.requireSession(session);
+            const n = this.meta<Dict>('management:' + id);
+            need(n && !n.used && n.session === session && n.action === action && n.target === target && n.epoch === this.meta('epoch') && this.clock() >= n.issued_at && this.clock() - n.issued_at < 180000, 'management_challenge_invalid');
+            return n;
+        };
+        const n = fresh(), c = this.credential(assertion?.id); need(c, 'unknown_credential');
+        const facts = await this.verifier(assertion, c, b64decode(n.challenge), this.env.ORIGIN, this.env.RP_ID);
+        this.storage.transactionSync(() => {
+            need(canonical(fresh()) === canonical(n) && canonical(this.credential(c.id)) === canonical(c), 'management_challenge_invalid');
+            const destination = this.meta<Dict>('session:' + target);
+            need(destination && destination.credential_id === this.meta<Dict>('session:' + session)!.credential_id, 'action_target_refused');
+            this.putMeta('session:' + target, {...destination, revoked: true});
+            this.putMeta('management:' + id, {...n, used: true});
+            this.saveCredential({...c, sign_count: facts.sign_count, be: facts.be, bs: facts.bs});
+            this.audit(action, {target});
+        });
+    }
+    withdraw(rid: string): Dict {
+        return this.storage.transactionSync(() => {
+            const e = this.entry(rid); this.tick(e);
+            e.state = transition(e.state, 'withdraw', {}, this.clock(), e.request);
+            this.history(e, 'withdraw'); this.save(e); return this.record(e);
+        });
+    }
+    list(): Dict { return { ...this.credentialSummary(), last_response: this.meta<string>('last_contact')?.slice(11, 16) ?? null, requests: this.storage.sql.exec<{ rid: string }>('SELECT rid FROM latest').toArray().map(({ rid }) => this.get(rid)) }; }
     credentialAddOptions(session: string): Dict {
         return this.storage.transactionSync(() => {
             this.requireSession(session);
@@ -241,7 +290,7 @@ export class Store {
         const n = this.freshAdd(session, id);
         const candidate = await verifyRegistration(registration, b64decode(n.challenge), this.env.ORIGIN, this.env.RP_ID);
         const nonce = random(32);
-        const challenge = b64encode(await sha256Add(id, candidate, nonce));
+        const challenge = b64encode(await sha256(utf8(canonical({format: 'mapl-credential-add/2', session, action_id: id, candidate, nonce}))));
         return this.storage.transactionSync(() => {
             need(canonical(this.freshAdd(session, id)) === canonical(n) && !n.candidate, 'credential_add_invalid', 409);
             need(!this.credentials().some(c => c.id === candidate.id), 'credential_exists', 409);
@@ -377,7 +426,7 @@ export class Store {
                 need(REFUSAL_CODES.has(code), 'refusal_code_invalid');
                 let row = e.history.find(x => x.event === event && x.code === code);
                 if (!row) {
-                    this.history(e, event, { code, text: code === 'CONTENT_MISMATCH' ? 'Mac 실행기(모의)가 내용 불일치로 맡지 않음 (CONTENT_MISMATCH)' : `Mac 실행기(모의)가 검증 불일치로 맡지 않음 (${code})`, count: 1, last_at: stamp(this.clock()) });
+                    this.history(e, event, { code, text: code === 'EXPIRED' ? 'Mac 실행기(모의)가 만료로 맡지 않음 (EXPIRED)' : code === 'CONTENT_MISMATCH' ? 'Mac 실행기(모의)가 내용 불일치로 맡지 않음 (CONTENT_MISMATCH)' : `Mac 실행기(모의)가 검증 불일치로 맡지 않음 (${code})`, count: 1, last_at: stamp(this.clock()) });
                 }
                 else {
                     row.count = (row.count ?? 1) + 1;
@@ -387,7 +436,7 @@ export class Store {
                 this.save(e);
                 return this.record(e);
             }
-            need(['start', 'result', 'not_run'].includes(event), 'event_refused');
+            need(['start', 'result', 'not_run', ...FLOW_EVENTS].includes(event), 'event_refused');
             if (evidence.code)
                 need(typeof evidence.code === 'string' && /^[A-Z_]{1,80}$/.test(evidence.code), 'refusal_code_invalid');
             this.tick(e);

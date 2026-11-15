@@ -74,10 +74,12 @@ describe('W1 immutable oracle: all rows', () => {
             interned.set(seq.join(','), { state: next, now });
         }
     });
-    it('112 complete Korean views and confirmations', () => { expect(BAND).toBe(wording.band); for (const row of wording.cases) {
+    it('112 immutable v1 statuses; AF1 supersedes old screen layout', () => { expect(BAND).toBe(wording.band); for (const row of wording.cases) {
         const node = states.nodes[row.node], now = utc(node.now), text = display(node.state, base, now), record = { request: base, history: [{ at: base.created_at, event: 'create' }], runner_status: 'Mac 실행기(모의) 연결 기록 없음', credential_count: 0, display_state: text };
         expect(text).toBe(row.display);
-        expect(view(record, now)).toEqual(row.view);
+        const current = view(record, now);
+        for (const field of ['title', 'change', 'state']) expect(current[field]).toBe(row.view[field as keyof typeof row.view]);
+        expect(current.failure).toContain('이 요청은 교체 뒤 확인을 하지 않습니다.');
         expect(confirm(record, 'https://mapl-test.invalid')).toBe(row.confirmation);
     } });
     it('strict JSON fixed duplicate row', () => { for (const row of strictRows)

@@ -56,7 +56,7 @@ export function compareResults(actual, expected, {registrationClosed=false}={}) 
 export function browserScenarios(rid='1'.repeat(32)) {
  const html=['/','/r/'+rid,'/history','/credential-add'];
  const get=['/api/requests','/api/requests/'+rid,'/api/requests/'+rid+'/history','/api/history'];
- const post=['/api/requests/'+rid+'/approve/options','/api/requests/'+rid+'/approve/verify','/api/requests/'+rid+'/decline','/api/credential-add/options','/api/credential-add/prepare','/api/credential-add/verify','/api/logout'];
+ const post=['/api/requests/'+rid+'/approve/options','/api/requests/'+rid+'/approve/verify','/api/requests/'+rid+'/decline','/api/requests/'+rid+'/withdraw','/api/credential-add/options','/api/credential-add/prepare','/api/credential-add/verify','/api/logout','/api/logout/options','/api/session-revoke/options','/api/session-revoke/verify'];
  return [...html.map(path=>['GET',path,303]),...get.map(path=>['GET',path,401]),...post.map(path=>['POST',path,401])];
 }
 export async function unsigned({origin, tokens={}, request=fetch, registrationClosed=false}) {
@@ -65,7 +65,7 @@ export async function unsigned({origin, tokens={}, request=fetch, registrationCl
   const r=await request(origin+path,{method,headers:{Origin:origin,'Content-Type':'application/json',...headers},body:method==='POST'?typeof body==='string'?body:JSON.stringify(body??{}):undefined,redirect:'manual',signal:AbortSignal.timeout(10000)});
   assert.equal(r.status,status,label+': '+path);securityHeaders(r,label);
   if(error)assert.equal((await r.json()).error,error,label+': '+path);
-  if(status===303)assert.equal(r.headers.get('location'),'/login');
+  if(status===303)assert.equal(r.headers.get('location'),'/login'+(/^\/r\/[0-9a-f]{32}$/.test(path)?'#'+path:''));
   rows.push({label,method,path,status,error:error??null});return r;
  };
  for(const kind of ['none','forged-cookie','spoofed','wrong-token',...Object.keys(tokens)]) {

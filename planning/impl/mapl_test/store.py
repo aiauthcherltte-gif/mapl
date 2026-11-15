@@ -75,6 +75,8 @@ class Store:
     def create_request(self, request):
         with self.lock:
             request = validate(request, self.root)
+            if request['format'] == 'mapl-request/2' and not -300 <= (state.utc(request['created_at']) - self.clock()).total_seconds() <= 60:
+                raise Refusal('request_invalid', 400)
             rid, revision = request['request_id'], request['revision']
             latest = self._data['latest'].get(rid)
             if latest is not None:
@@ -221,6 +223,15 @@ class Store:
             self._save()
             return self.get(rid)
 
+    def withdraw(self, rid):
+        with self.lock:
+            entry = self._entry(rid)
+            self._tick(entry)
+            entry['state'] = state.transition(entry['state'], 'withdraw', {}, self.clock(), entry['request'])
+            self._history(entry, 'withdraw')
+            self._save()
+            return self.get(rid)
+
     def decline(self, rid):
         with self.lock:
             entry = self._entry(rid)
@@ -285,14 +296,14 @@ class Store:
                 if entry['state']['claim_id'] is not None:
                     raise Refusal('already_claimed')
                 code = evidence.get('code')
-                if code not in ('CONTENT_MISMATCH', 'pinned_key_mismatch', 'ASSERTION_REFUSED', 'CLOCK_SKEW'):
+                if code not in ('EXPIRED', 'CONTENT_MISMATCH', 'pinned_key_mismatch', 'ASSERTION_REFUSED', 'CLOCK_SKEW'):
                     raise Refusal('refusal_code_invalid', 400)
                 self._history(entry, event, code=code,
-                    text='Mac 실행기(모의)가 내용 불일치로 맡지 않음 (CONTENT_MISMATCH)' if code == 'CONTENT_MISMATCH'
+                    text='Mac 실행기(모의)가 만료로 맡지 않음 (EXPIRED)' if code == 'EXPIRED' else 'Mac 실행기(모의)가 내용 불일치로 맡지 않음 (CONTENT_MISMATCH)' if code == 'CONTENT_MISMATCH'
                     else 'Mac 실행기(모의)가 검증 불일치로 맡지 않음 (' + code + ')')
                 self._save()
                 return self.get(rid, revision)
-            if event not in ('start', 'result', 'not_run'):
+            if event not in ('start', 'result', 'not_run') + state.flow.EVENTS:
                 raise Refusal('event_refused', 400)
             if evidence.get('code') and (not isinstance(evidence['code'], str) or not re.fullmatch(r'[A-Z_]{1,80}', evidence['code'])):
                 raise Refusal('refusal_code_invalid', 400)

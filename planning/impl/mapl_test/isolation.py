@@ -30,7 +30,7 @@ if not (isinstance(FORBIDDEN_PATHS, list) and FORBIDDEN_PATHS
     raise RuntimeError('invalid MAPL_FORBIDDEN_PATHS')
 DENY = (*FORBIDDEN_PATHS, 'screen-current', 'ledger', '.sqlite', '.db', '-wal', '-shm')
 NOT_COVERED = ('ledger write', 'service start', 'collector restart', 'recovery')
-RUNTIME_READS = frozenset(('mock_kit.py', 'static/index.html', 'static/app.js', 'static/app.css'))
+RUNTIME_READS = frozenset(('mock_kit.py', 'check_contract.py', 'static/index.html', 'static/app.js', 'static/app.css'))
 _PACKAGE = os.path.realpath(os.path.dirname(__file__))
 _MINT = object()
 _PATH = re.compile(r'[a-z0-9][a-z0-9_.-]*(/[a-z0-9][a-z0-9_.-]*)*\Z')

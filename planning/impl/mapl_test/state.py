@@ -4,13 +4,15 @@ import re
 from datetime import datetime, timezone
 
 from .errors import Refusal
+from . import flow
 
-FINAL_EXECUTION = frozenset(('done', 'failed_no_change', 'failed_after_marker', 'not_run', 'expired_not_run'))
+FINAL_EXECUTION = frozenset(('done', 'check_failed', 'check_unknown', 'recovered', 'recovery_refused', 'failed_no_change', 'failed_after_marker', 'not_run', 'expired_not_run'))
 EXPLICIT_REFUSALS = frozenset(('EXPIRED', 'WINDOW_NOT_OPEN', 'POINTER_BEFORE_MISMATCH', 'KIT_LOCKED', 'REFUSED'))
-PROPERTY_EVENTS = ('approve', 'decline', 'cancel', 'revise', 'claim_same', 'claim_other',
+V1_PROPERTY_EVENTS = ('approve', 'decline', 'cancel', 'revise', 'claim_same', 'claim_other',
     'start_ok', 'start_wrong', 'result_done', 'result_no_change', 'result_after_marker',
     'result_partial', 'result_other', 'not_run_full', 'not_run_empty', 'tick_15m', 'tick_24h')
 
+PROPERTY_EVENTS = V1_PROPERTY_EVENTS + flow.EVENTS + ('withdraw',)
 
 def utc(value):
     if not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z', value):
@@ -65,6 +67,11 @@ def transition(previous, event, evidence, now, request):
     current = copy.deepcopy(previous)
     execution, approval = current['execution'], current['approval']
     if event.startswith('tick'):
+        if execution in ('checking', 'recovering'):
+            since = current.get('checking_at' if execution == 'checking' else 'recovery_at')
+            if since and (now - utc(since)).total_seconds() >= 900:
+                current['execution'] = 'check_unknown' if execution == 'checking' and not request['recovery']['included_in_this_approval'] else 'unknown'
+            return current
         if execution in ('claimed', 'running'):
             since = current['started_at'] if execution == 'running' else current['claimed_at']
             if since and (now - utc(since)).total_seconds() >= 900:
@@ -84,6 +91,14 @@ def transition(previous, event, evidence, now, request):
         if expired(request, now):
             raise Refusal('expired')
         current['approval'] = 'approved'
+    elif event == 'withdraw':
+        if approval != 'approved' or execution != 'not_started' or current['claim_id']:
+            raise Refusal('withdraw_refused')
+        current['approval'] = 'withdrawn'
+    elif event in flow.EVENTS:
+        if event in ('check_ok', 'check_failed', 'check_unknown') and current['execution'] in ('claimed', 'running', 'unknown') and result_state(evidence, request) == 'done':
+            current.update(execution='checking', checking_at=stamp(now))
+        return flow.transition(current, event, evidence, now, request)
     elif event == 'decline':
         if approval != 'pending' or current['claim_id']:
             raise Refusal('not_pending')
@@ -119,6 +134,8 @@ def transition(previous, event, evidence, now, request):
             current['execution'] = 'not_run'
         else:
             current['execution'] = result_state(evidence, request)
+            if request['format'] == 'mapl-request/2' and current['execution'] == 'done':
+                current.update(execution='checking', checking_at=stamp(now))
     else:
         raise Refusal('event_refused')
     return current
@@ -129,7 +146,10 @@ def display(current, request, now):
     execution = current['execution']
     if approval not in ('approved', 'expired'):
         return {'pending': '승인 대기', 'declined': '거절됨 · 실행하지 않습니다.',
-                'superseded': '내용 변경으로 무효', 'cancelled': '요청자 철회'}.get(approval, '만료')
+                'superseded': '내용 변경으로 무효', 'withdrawn': '승인 철회 · 실행하지 않습니다', 'cancelled': '요청자 철회'}.get(approval, '만료')
+    v2text = flow.display(current, request)
+    if v2text:
+        return v2text
     if execution == 'not_started':
         if now < utc(request['window_utc'][0]):
             return '아직 실행 안 함 · 실행 가능 시간 ' + utc(request['window_utc'][0]).astimezone().strftime('%H:%M') + '부터'

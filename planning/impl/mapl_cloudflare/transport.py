@@ -46,7 +46,8 @@ class HTTPSTransport:
                                                timeout=5, context=self.context)
         try:
             connection.request(method, path, body=None if body is None else canonical_bytes(body),
-                headers={'Authorization': 'Bearer ' + self.token, 'Content-Type': 'application/json'})
+                headers={'Authorization': 'Bearer ' + self.token, 'Content-Type': 'application/json',
+                         'User-Agent': 'mapl-mock-runner/1'})
             response = connection.getresponse()
             payload = response.read(2 * 1024 * 1024 + 1)
             if len(payload) > 2 * 1024 * 1024:

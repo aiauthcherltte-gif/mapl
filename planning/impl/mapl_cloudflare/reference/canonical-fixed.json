@@ -1,0 +1,9 @@
+[
+  {"id":"safe_positive","input":9007199254740991,"expected":{"accepted":true,"utf8":"9007199254740991"}},
+  {"id":"safe_negative","input":-9007199254740991,"expected":{"accepted":true,"utf8":"-9007199254740991"}},
+  {"id":"unsafe_positive","input":9007199254740992,"expected":{"accepted":false,"reason":"json_integer_out_of_range","status":400}},
+  {"id":"unsafe_negative","input":-9007199254740992,"expected":{"accepted":false,"reason":"json_integer_out_of_range","status":400}},
+  {"id":"unsafe_positive_adjacent","input":9007199254740993,"expected":{"accepted":false,"reason":"json_integer_out_of_range","status":400}},
+  {"id":"unsafe_nested","input":{"nested":[9007199254740993]},"expected":{"accepted":false,"reason":"json_integer_out_of_range","status":400}},
+  {"id":"code_point_keys","input":{"😀":1,"":2,"é":3,"한":4,"a":5,"𐀀":6},"expected":{"accepted":true,"utf8":"{\"a\":5,\"é\":3,\"한\":4,\"\":2,\"𐀀\":6,\"😀\":1}"}}
+]

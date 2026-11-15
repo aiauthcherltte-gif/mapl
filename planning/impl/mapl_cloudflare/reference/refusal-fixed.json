@@ -1,0 +1,4 @@
+[
+  {"id":"clock_skew_accepted","event":"refused_before_claim","code":"CLOCK_SKEW","expected":{"accepted":true,"status":200}},
+  {"id":"unknown_code_rejected","event":"refused_before_claim","code":"UNKNOWN_REFUSAL","expected":{"accepted":false,"status":400,"reason":"refusal_code_invalid"}}
+]

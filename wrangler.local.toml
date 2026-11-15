@@ -1,0 +1,23 @@
+name = "mapl-local-only"
+main = "src/worker.ts"
+compatibility_date = "2025-10-04"
+send_metrics = false
+workers_dev = false
+preview_urls = false
+[dev]
+ip = "127.0.0.1"
+port = 8790
+[durable_objects]
+bindings = [{ name = "APPROVAL", class_name = "MaplApproval" }]
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MaplApproval"]
+[vars]
+MODE = "test"
+ORIGIN = "http://localhost:8790"
+RP_ID = "localhost"
+TEST_ROOT_ID = "22222222222222222222222222222222"
+[[rules]]
+type = "Text"
+globs = ["**/*.html", "**/*.txt"]
+fallthrough = true

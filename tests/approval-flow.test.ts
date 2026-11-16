@@ -1,8 +1,8 @@
 import { it, expect } from 'vitest';
-import { base, world, refuses, CID } from './support';
+import { base, world, refuses, CID, CODE } from './support';
 import { validate } from '../src/request';
 import { canonical, contentHash, approvalChallenge, b64decode } from '../src/canonical';
-import { transition, display, utc, initial, propertyEvidence } from '../src/state';
+import { transition, display, kst, kstRange, utc, initial, propertyEvidence } from '../src/state';
 import { failureText, view } from '../src/ui';
 import requests from '../planning/impl/mapl_cloudflare/reference/request-v2.json';
 import states from '../planning/impl/mapl_cloudflare/reference/state-v2.json';
@@ -130,8 +130,58 @@ it('AF1 approval screen binds fixed server host and removes the extra panel',()=
 it('AF1 date and time formatting and fixed impact wording', () => {
     const r = v2(), v = view({request:r, history:[], display_state:'승인 대기'}, utc(r.created_at));
     expect(v.impact).toBe('시험 화면을 여는 사람에게 새 세대의 자료가 보입니다.');
-    for (const field of ['scope', 'deadline']) {
-        expect(v[field]).toMatch(/2026-11-14 \d{2}:\d{2}/);
-        expect(v[field]).not.toMatch(/T\d{2}:\d{2}/);
-    }
+    expect(v.deadline).toBe('11월\u00a014일\u00a017:00\u00a0KST까지 (120분 남음)');
+    expect(v.scope).toBe('이 포인터를 한 번 바꿉니다 · 원장·서비스·수집기는 바꾸지 않습니다 · 실행 가능 11월\u00a014일\u00a015:00–17:00\u00a0KST');
 });
+it('MAPLTZ fixed KST rollover, fractional seconds and ranges', () => {
+    expect(kst('2026-11-16T14:59:00Z')).toBe('11월\u00a016일\u00a023:59\u00a0KST');
+    expect(kst('2026-11-16T15:00:00Z')).toBe('11월\u00a017일\u00a000:00\u00a0KST');
+    expect(kst('2026-12-31T15:30:00.5Z')).toBe('1월\u00a01일\u00a000:30\u00a0KST');
+    expect(kst('2026-11-16T15:00:09Z', true)).toBe('11월\u00a017일\u00a000:00:09\u00a0KST');
+    expect(kstRange('2026-11-16T12:30:00Z', '2026-11-16T14:30:00Z')).toBe('11월\u00a016일\u00a021:30–23:30\u00a0KST');
+    expect(kstRange('2026-11-16T14:30:00Z', '2026-11-16T16:30:00Z')).toBe('11월\u00a016일\u00a023:30 – 11월\u00a017일\u00a001:30\u00a0KST');
+});
+it('MAPLTZ midnight deadline and history contain only formatted clock text', () => {
+    const r = {...v2(), created_at:'2026-11-16T14:30:00Z', expires_at:'2026-11-16T15:30:00Z', window_utc:['2026-11-16T14:30:00Z','2026-11-16T16:30:00Z']};
+    const v = view({request:r, history:[{at:r.created_at,event:'create'}], display_state:'승인 대기'}, utc(r.created_at));
+    expect(v.deadline).toBe('11월\u00a017일\u00a000:30\u00a0KST까지 (60분 남음)');
+    expect(v.scope).toContain('11월\u00a016일\u00a023:30 – 11월\u00a017일\u00a001:30\u00a0KST');
+    expect(v.details_text).toContain('11월\u00a016일\u00a023:30:00\u00a0KST create');
+    for (const field of Object.values(v)) expect(field).not.toMatch(/T\d\d:|Z|\d{4}-\d{2}-\d{2}/);
+});
+it('MAPLTZ list sorts newest first with deterministic id ties and distinct same-minute marks', () => world(async w => {
+    const a = {...structuredClone(base), request_id:'a'.repeat(32)}, b = {...structuredClone(base), request_id:'b'.repeat(32)};
+    await w.store.create(b); await w.store.create(a);
+    const later = {...structuredClone(base), request_id:'c'.repeat(32), created_at:new Date(w.clock.now + 1000).toISOString()};
+    await w.store.create(later);
+    const rows = w.store.list().requests;
+    expect(rows.map((r: Dict) => r.request.request_id)).toEqual([later.request_id, ...[w.rid,a.request_id,b.request_id].sort()]);
+    const pair = rows.filter((r: Dict) => [a.request_id,b.request_id].includes(r.request.request_id));
+    expect(pair[0].list_title).toBe(`화면 자료 게시 ${a.target.from_generation} → ${a.target.to_generation}`);
+    expect(pair[1].list_title).toBe(pair[0].list_title);
+    expect(pair.map((r: Dict) => r.list_meta)).toEqual([`요청 ${kst(a.created_at)} · #aaaaaa`, `요청 ${kst(b.created_at)} · #bbbbbb`]);
+}));
+it('MAPLTZ last response null and contact/stop timestamps retain elapsed wording', () => world(w => {
+    expect(w.store.list().last_response).toBeNull();
+    w.store.putMeta('last_contact','2026-11-16T15:00:09Z'); w.clock.now=utc('2026-11-16T15:02:09Z');
+    expect(w.store.list().last_response).toBe('11월\u00a017일\u00a000:00\u00a0KST');
+    expect(w.store.runnerStatus()).toBe('Mac 실행기(모의) 마지막 연결 11월\u00a017일\u00a000:00:09\u00a0KST (2분 전) · 켜짐·꺼짐은 이 정보만으로 알 수 없습니다');
+    w.store.putMeta('stopped_at','2026-11-16T15:01:09Z');
+    expect(w.store.runnerStatus()).toBe('실행기가 꺼진다고 알림 11월\u00a017일\u00a000:01:09\u00a0KST');
+}));
+it('MAPLTZ history API adds display text while preserving UTC audit time', () => world(async w => {
+    const before = w.store.meta<Dict[]>('auth_history')!;
+    const response = await w.http('GET','/api/history'), body = await response.json() as Dict;
+    expect(body.history.length).toBeGreaterThan(0);
+    expect(body.history).toEqual(before.map(e => ({...e,at_text:kst(e.at,true)})));
+    expect(w.store.meta('auth_history')).toEqual(before);
+}));
+it('MAPLTZ register API adds server time text without changing UTC credential summary', () => world(async w => {
+    const options = await w.store.registrationOptions(CODE);
+    const credential = await w.auth.registration(b64decode(options.challenge));
+    const response = await w.http('POST','/api/register/verify',{code:CODE,credential}), body = await response.json() as Dict;
+    expect(response.status).toBe(200);
+    expect(body.registered_at).toBe(base.created_at);
+    expect(body.credential_registered_at).toBe(base.created_at);
+    expect(body.registered_at_text).toBe(kst(base.created_at,true));
+}, false));

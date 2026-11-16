@@ -176,3 +176,39 @@ The new request page uses a bottom-pinned approval bundle with the complete fixe
 server host. Its measured height reserves a separate content viewport, so rows
 scroll above the bundle rather than behind it. No row text or spacing is reduced. Static/VM tests do not establish actual 390×660 browser geometry;
 that still requires a separately authorized rendering check.
+
+
+AF1 device-check mock tooling accepts `submit-v2` and `submit-withdraw-target`
+through `scripts/mock-mac.py` with the same `--state` and `--token-dir` arguments
+as `submit`. Both commands preserve the existing root and original request;
+they add immutable per-request manifests and public `device_requests` metadata.
+Requests bind the actual CURRENT generation (including the already-executed
+predecessor's gen/0006) to the other intact mock generation, without reseeding.
+The first submission guard remains unchanged; exclusive per-request attempt
+markers retain new submission history.
+`submit-v2` signs all four scopes, with collector/screen always pending, and the one-attempt,
+10-minute recovery clause. `submit-withdraw-target` creates a distinct v1 request.
+Each command prints its public request ID and expiry and reuses that ID on retry.
+Retries do not refresh the two-hour window. Prepare both before starting the runner;
+approve and withdraw the second request on the approval screen before `start`.
+Do not use `prepare` or `reseed` for this device check. After a submission attempt,
+ordinary offline reseeding remains refused. `start` keeps using the independently
+reviewed `--public-pin`; it executes only approved requests and rebuilds the v2
+check descriptor before claiming. A normal mock v2 completion verifies pointer
+and reading only, with collector and screen checks pending.
+
+Additional offline witnesses (with the isolation environment set as above):
+
+```sh
+"${MAPL_PYTHON:?set MAPL_PYTHON}" -I -B tests/mock-mac-fixture.py
+"${MAPL_PYTHON:?set MAPL_PYTHON}" -I -B tests/mock-device-integration.py
+"${MAPL_PYTHON:?set MAPL_PYTHON}" -I -B scripts/run-af1m-mutant.py
+```
+
+The integration witness first executes a predecessor request to build the W8
+shape (CURRENT at gen/0006, existing journal and execution record), then runs
+the JS submission helper, current local Worker and MacRunner in the reverse
+direction with synthetic local-profile credentials and software signatures only.
+It checks the full recovery failure line and the exact verified/pending result,
+a single swap without recovery, and unchanged withdrawal history with no claim,
+kit marker or runner record for the withdrawn request.

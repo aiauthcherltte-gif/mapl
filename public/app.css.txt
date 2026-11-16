@@ -29,3 +29,13 @@ main:has(#request:not([hidden])) > #error { flex-shrink: 0; margin: 0; padding-i
 main:has(#actions:not([hidden])) { padding-bottom: var(--approval-height, 180px); }
 #actions { position: fixed; bottom: 0; left: 0; right: 0; width: min(100%, 620px); margin: 0 auto; padding: 8px 16px; background: #fff; border-top: 1px solid #ccdcd4; z-index: 2; }
 #site-host { font-size: 1rem; line-height: 1.5; overflow-wrap: anywhere; white-space: normal; text-overflow: clip; overflow: visible; height: auto; -webkit-line-clamp: none; margin: 0; }
+
+#request-list a span { display: block; white-space: normal; overflow-wrap: anywhere; }
+
+#request-list p { margin: 0; border-bottom: 1px solid #ccdcd4; }
+#request-list a { display: block; padding: 14px 0; color: #186451; text-decoration: none; }
+#request-list a span:first-child { text-decoration: underline; text-underline-offset: 3px; font-weight: 600; }
+#request-list a span:not(:first-child) { color: #5e706c; }
+#request-list a:focus-visible { outline: 3px solid #2474ad; outline-offset: 3px; }
+
+#request dd, #request pre, #list-panel { word-break: keep-all; overflow-wrap: anywhere; }

@@ -152,7 +152,7 @@ el('register').addEventListener('click', async () => {
     const options = await api('/api/register/options', {code});
     const credential = await navigator.credentials.create(credentialsOptions(options));
     const result = await api('/api/register/verify', {code, credential: serialized(credential)});
-    text('registration-status', '시험용 패스키 1개 등록됨 · ' + new Date(result.registered_at).toLocaleTimeString('ko-KR'));
+    text('registration-status', '시험용 패스키 1개 등록됨 · ' + result.registered_at_text);
     el('setup-code').value = '';
     el('setup-code').disabled = true;
   } catch (error) { text('error', error.message || error.name); el('register').disabled = false; }
@@ -204,7 +204,10 @@ else if (location.pathname === '/') {
     text('runner-summary', (result.last_response ? '실행기 마지막 응답 ' + result.last_response + ' · ' : '') + '켜짐·꺼짐은 이 정보만으로 알 수 없습니다');
     for (const r of result.requests) {
       const link = document.createElement('a'), row = document.createElement('p');
-      link.href = '/r/' + r.request.request_id; link.textContent = '화면 자료 게시 · ' + r.display_state;
+      link.href = '/r/' + r.request.request_id;
+      for (const value of [r.list_title, r.list_meta, r.display_state]) {
+        const line = document.createElement('span'); line.textContent = value; link.appendChild(line);
+      }
       row.appendChild(link); el('request-list').appendChild(row);
     }
   }).catch(error => text('error', error.message));

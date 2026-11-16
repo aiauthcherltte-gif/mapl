@@ -24,9 +24,25 @@ class MockAdapterTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix='mapl-mock-fixture-')
         self.addCleanup(self.tmp.cleanup)
         self.repo = Path(self.tmp.name)
-        self.root = TestRoot.create()
-        self.addCleanup(self.cleanup_root)
-        self.request = module['seed'](self.root, module['Baseline'](self.root), NOW)
+        if self._testMethodName.startswith('test_device_'):
+            # W8 shape: actually execute the predecessor with the mock runner.
+            from planning.impl.mapl_test.tests.support import World
+            from planning.impl.mapl_test.runner_sim import DirectTransport, RunnerInstance
+            self.world = World()
+            self.addCleanup(self.world.close)
+            self.root, self.request = self.world.root, self.world.request
+            self.world.approve()
+            runner = module['MacRunner'](self.root, DirectTransport(self.world.store),
+                                         self.world.kit, self.world.clock)
+            try: RunnerInstance.step(runner)
+            finally: runner.close()
+            self.assertEqual(self.world.record()['execution'], 'done')
+            module['mark_submission']({'root': self.root.path, 'root_id': self.root.root_id,
+                                       'request': self.request})
+        else:
+            self.root = TestRoot.create()
+            self.addCleanup(self.cleanup_root)
+            self.request = module['seed'](self.root, module['Baseline'](self.root), NOW)
         self.data = {'mode': 'test', 'root': self.root.path, 'root_id': self.root.root_id, 'request': self.request}
         self.state = self.repo / 'state.json'
         self.state.write_text(json.dumps(self.data))
@@ -73,6 +89,68 @@ class MockAdapterTests(unittest.TestCase):
         second = json.loads(self.invoke())
         self.assertNotEqual(second['request_id'], request['request_id'])
         self.assertEqual(len(list(self.repo.glob('state.json.previous-*'))), 2)
+
+    def test_device_requests_preserve_root_and_retry_identity(self):
+        before = self.root.read_bytes(self.root.pointer())
+        data, v2 = module['device_request'](self.state, self.data, 'v2', lambda: NOW)
+        self.assertEqual(v2['format'], 'mapl-request/2')
+        self.assertTrue(v2['recovery']['included_in_this_approval'])
+        self.assertEqual(v2['check']['scope'], ['pointer_bytes', 'pinned_reader', 'collector', 'screen'])
+        self.assertEqual(v2['target']['from_generation'], 'gen/0006')
+        self.assertEqual(v2['target']['to_generation'], 'gen/0005')
+        self.assertEqual(utc(v2['recovery']['valid_until']) - utc(v2['window_utc'][1]), timedelta(minutes=10))
+        again, same = module['device_request'](self.state, data, 'v2', lambda: NOW + timedelta(minutes=1))
+        self.assertEqual(v2, same)
+        final, withdraw = module['device_request'](self.state, again, 'withdraw-target', lambda: NOW)
+        self.assertNotEqual(v2['request_id'], withdraw['request_id'])
+        self.assertEqual(final['request'], self.request)
+        self.assertEqual(self.root.read_bytes(self.root.pointer()), before)
+        self.assertEqual(final['root_id'], self.data['root_id'])
+        self.assertEqual(self.root.read_json('runner/manifests/' + self.request['request_id'] + '/1.json'), self.request)
+        # Cannot use a changed signed descriptor, even when the local manifest
+        # has the same changed bytes: it must be independently rebuilt.
+        final['device_requests']['v2']['check']['scope'].remove('screen')
+        self.root.write_json('runner/manifests/' + v2['request_id'] + '/1.json', final['device_requests']['v2'])
+        self.state.write_text(json.dumps(final))
+        with self.assertRaises(ValueError): module['device_request'](self.state, final, 'v2', lambda: NOW)
+
+    def test_device_submit_actions_use_requester_stdin_and_selected_request(self):
+        token = self.repo / 'requester.token'
+        token.write_text('visibly-fake-requester-fixture-0000000')
+        token.chmod(0o600)
+        seen = []
+        def submit(argv, **options):
+            seen.append(argv[-1])
+            self.assertEqual(options['input'], token.read_text())
+            selected = json.loads(self.state.read_text())['device_requests'][argv[-1]]
+            self.assertEqual(self.root.read_json('runner/submission-attempted.json')['request_id'], self.request['request_id'])
+            self.assertEqual(self.root.read_json('runner/submission-attempts/' + selected['request_id'] + '.json'),
+                             {'request_id': selected['request_id']})
+            return SimpleNamespace(returncode=0)
+        old_marker = self.root.read_bytes('runner/submission-attempted.json')
+        old_record = self.root.read_bytes('runner/records/' + self.request['request_id'] + '.json')
+        with patch('subprocess.run', submit):
+            for action in ('submit-v2', 'submit-withdraw-target', 'submit-v2'):
+                output = self.invoke(action)
+                self.assertNotIn(token.read_text(), output)
+        self.assertEqual(self.root.read_bytes('runner/submission-attempted.json'), old_marker)
+        self.assertEqual(self.root.read_bytes('runner/records/' + self.request['request_id'] + '.json'), old_record)
+        self.assertEqual(seen, ['v2', 'withdraw-target', 'v2'])
+        self.assertEqual(len(json.loads(self.state.read_text())['device_requests']), 2)
+        with self.assertRaises(ValueError): self.invoke('reseed')
+
+    def test_device_prepare_refuses_changed_pointer_or_bundle(self):
+        for purpose in ('v2', 'withdraw-target'):
+            with self.subTest(purpose=purpose):
+                self.root.write_atomic(self.root.pointer(), b'not-a-prepared-generation')
+                with self.assertRaises(ValueError): module['device_request'](self.state, self.data, purpose, lambda: NOW)
+                self.assertEqual(self.state.read_bytes(), self.original)
+                self.root.write_atomic(self.root.pointer(), self.root.read_bytes('bundles/gen/0006/pointer.json'))
+                bundle = self.root.read_bytes('bundles/gen/0005/data.json')
+                self.root.write_atomic('bundles/gen/0005/data.json', b'changed-bundle')
+                with self.assertRaises(ValueError): module['device_request'](self.state, self.data, purpose, lambda: NOW)
+                self.assertEqual(self.state.read_bytes(), self.original)
+                self.root.write_atomic('bundles/gen/0005/data.json', bundle)
 
     def test_profile_root_mismatch(self):
         self.profile.write_text(json.dumps({'TEST_ROOT_ID': '0' * 32}))

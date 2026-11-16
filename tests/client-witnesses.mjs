@@ -9,20 +9,37 @@ const record = (revision = 1, approval = 'pending') => ({request: {revision, con
   content_hash: String(revision).repeat(64), approval, execution: 'not_started', server_now: '2026-11-14T06:00:00Z',
   site_host: 'mapl-test.fixture.workers.dev', view: {title: 'revision ' + revision, change: '', deadline: '', conditions: '', state: approval, details_text: ''}, confirmation: 'revision ' + revision});
 const credential = {id: 'a', type: 'public-key', response: {clientDataJSON: new Uint8Array([1]), authenticatorData: new Uint8Array([2]), signature: new Uint8Array([3])}};
-async function harness() {
+async function harness(pathname = '/r/abc', initial = record()) {
   const nodes = new Map(), calls = [], intervals = [], queue = [];
-  const node = id => { if (!nodes.has(id)) nodes.set(id, {style: {setProperty() {}}, getBoundingClientRect() { return {height: 120}; }, textContent: '', hidden: false, disabled: false, insertBefore() {}, addEventListener(kind, fn) { this[kind] = fn; }}); return nodes.get(id); };
-  const context = vm.createContext({document: {getElementById: node, querySelector: node, hidden: false, addEventListener(kind,fn) { this[kind]=fn; }}, location: {pathname: '/r/abc'}, performance: {now: () => 0},
+  const node = id => { if (!nodes.has(id)) nodes.set(id, {style: {setProperty() {}}, getBoundingClientRect() { return {height: 120}; }, children: [], appendChild(child) { this.children.push(child); }, textContent: '', hidden: false, disabled: false, insertBefore() {}, addEventListener(kind, fn) { this[kind] = fn; }}); return nodes.get(id); };
+  const context = vm.createContext({document: {getElementById: node, querySelector: node, createElement: tag => node(Symbol(tag)), hidden: false, addEventListener(kind,fn) { this[kind]=fn; }}, location: {pathname}, performance: {now: () => 0},
     Uint8Array, atob, btoa, setInterval: fn => intervals.push(fn), navigator: {credentials: {get: async () => credential}},
     fetch: async (path, options) => { calls.push({path, body: options.body && JSON.parse(options.body)}); const value = queue.shift();
       if (value instanceof Error) throw value; const answer = await value; if (!answer) throw Error('missing fixture');
       return {ok: !answer.error, json: async () => answer}; }});
-  queue.push(record());
+  queue.push(initial);
   vm.runInContext(source, context);
   await flush();
-  return {node, calls, queue, context, poll: () => context.document.visibilitychange(), async click(id) { if (!node(id).disabled) await node(id).click(); await flush(); }};
+  return {node, calls, queue, context, intervals, poll: () => context.document.visibilitychange(), async click(id) { if (!node(id).disabled) await node(id).click(); await flush(); }};
 }
 const tests = {
+  async kst_deadline_minute_refresh_preserves_server_date_and_zone() {
+    const r = record(); r.view.deadline = '11월\u00a014일\u00a017:00\u00a0KST까지 (999분 남음)';
+    const h = await harness('/r/abc', r); h.intervals.at(-1)();
+    assert.equal(h.node('deadline').textContent, '11월\u00a014일\u00a017:00\u00a0KST까지 (120분 남음)');
+  },
+  async list_renders_server_title_meta_and_state_in_one_link() {
+    const rows = ['aaaaaa', 'bbbbbb'].map(id => ({request:{request_id:id.repeat(5)+'aa'}, list_title:'화면 자료 게시 gen/0006 → gen/0005', list_meta:'요청 11월\u00a017일\u00a000:00\u00a0KST · #'+id, display_state:'승인 대기'}));
+    const h = await harness('/', {requests:rows, last_response:'11월\u00a017일\u00a000:01\u00a0KST'});
+    assert.equal(h.node('runner-summary').textContent, '실행기 마지막 응답 11월\u00a017일\u00a000:01\u00a0KST · 켜짐·꺼짐은 이 정보만으로 알 수 없습니다');
+    for (const [i, row] of h.node('request-list').children.entries()) {
+      assert.equal(row.children.length, 1);
+      assert.equal(row.children[0].href, '/r/'+rows[i].request.request_id);
+      assert.deepEqual(row.children[0].children.map(n => n.textContent), [rows[i].list_title,rows[i].list_meta,rows[i].display_state]);
+    }
+    assert.equal(h.node('request-list').children.length, 2);
+  },
+  async client_has_no_local_clock_formatting() { assert.doesNotMatch(source, /toLocale|Intl|getHours|getMinutes/); },
   async full_fixed_host_has_comparison_prefix() {
     const h = await harness();
     assert.equal(h.node('site-host').textContent, '주소창과 비교: mapl-test.fixture.workers.dev');

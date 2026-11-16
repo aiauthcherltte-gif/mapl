@@ -6,7 +6,7 @@ MacRunner, its independent signature/key checks, and the mock kit are unchanged.
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import http.client
 import json
 from pathlib import Path
@@ -229,7 +229,7 @@ def scenario_run(name, server, evidence):
         record = api('GET', path)
         execution, count, wording = EXPECTED[name]
         if name == 'window_later':
-            wording = '아직 실행 안 함 · 실행 가능 시간 ' + request['window_utc'][0][11:16] + '부터'
+            wording = '아직 실행 안 함 · 실행 가능 시간 ' + (datetime.fromisoformat(request['window_utc'][0].replace('Z', '+00:00')) + timedelta(hours=9)).strftime('%-m월\u00a0%-d일\u00a0%H:%M\u00a0KST') + '부터'
         kit_calls = sum(p['kit_calls'] for p in processes)
         assert record['approval'] == 'approved' and record['execution'] == execution, record
         assert record['display_state'] == wording, (record['display_state'], wording)

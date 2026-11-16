@@ -26,7 +26,16 @@ export function utc(v: unknown): number {
     return base + Number('0.' + (m[7] ?? '0')) * 1000;
 }
 export const stamp = (now: number) => new Date(now).toISOString().replace(/\.\d{3}Z$/, 'Z');
-export const hm = (v: string) => new Date(utc(v)).toISOString().slice(11, 16);
+const kstDate = (iso: string) => new Date(utc(iso) + 9 * 3600000);
+const kstDay = (d: Date) => `${d.getUTCMonth() + 1}월\u00a0${d.getUTCDate()}일`;
+const kstClock = (d: Date, seconds = false) => [d.getUTCHours(), d.getUTCMinutes(), ...(seconds ? [d.getUTCSeconds()] : [])].map(n => String(n).padStart(2, '0')).join(':');
+export const kst = (iso: string, seconds = false) => { const d = kstDate(iso); return `${kstDay(d)}\u00a0${kstClock(d, seconds)}\u00a0KST`; };
+export function kstRange(a: string, b: string): string {
+    const start = kstDate(a), end = kstDate(b);
+    return start.getUTCFullYear() === end.getUTCFullYear() && start.getUTCMonth() === end.getUTCMonth() && start.getUTCDate() === end.getUTCDate()
+        ? `${kstDay(start)}\u00a0${kstClock(start)}–${kstClock(end)}\u00a0KST`
+        : `${kstDay(start)}\u00a0${kstClock(start)} – ${kst(b)}`;
+}
 export const initial = (): State => ({ approval: 'pending', execution: 'not_started', claim_id: null, claimed_at: null, started_at: null });
 export const expired = (r: MaplRequest, now: number) => now >= utc(r.expires_at) || now > utc(r.window_utc[1]);
 export function resultState(e: Dict, r: MaplRequest): string {
@@ -120,9 +129,9 @@ export function display(c: State, r: MaplRequest, now: number): string {
     const v2text = flowText(c, r);
     if (v2text) return v2text;
     if (e === 'not_started')
-        return now < utc(r.window_utc[0]) ? '아직 실행 안 함 · 실행 가능 시간 ' + hm(r.window_utc[0]) + '부터' : '아직 실행 안 함 · Mac이 이 요청을 맡지 않았습니다';
+        return now < utc(r.window_utc[0]) ? '아직 실행 안 함 · 실행 가능 시간 ' + kst(r.window_utc[0]) + '부터' : '아직 실행 안 함 · Mac이 이 요청을 맡지 않았습니다';
     if (e === 'running')
-        return `실행 중 · 시작 보고 ${hm(c.started_at!)} (${Math.max(0, Math.floor((now - utc(c.started_at!)) / 60000))}분 경과)`;
+        return `실행 중 · 시작 보고 ${kst(c.started_at!)} (${Math.max(0, Math.floor((now - utc(c.started_at!)) / 60000))}분 경과)`;
     return ({ claimed: '실행 여부 확인 안 됨 · Mac이 맡았고 시작 보고는 아직 없습니다', done: `완료 · 시험 대상 포인터가 ${r.target.to_generation}을 가리킴 (모의 실행)`, failed_no_change: '실패 · 실행 전 거부, 포인터 바뀐 것 없음 (' + (c.result_code ?? 'REFUSED') + ')', failed_after_marker: '실패 · 표시 뒤 실패, 포인터 바뀐 것 없음, 다시 실행 불가', not_run: '실행 안 됨 · 포인터 바뀐 것 없음 (Mac 보고)', expired_not_run: '만료 · 실행 안 함 (Mac이 맡기 전에 만료)', unknown: '결과 불명 · 자동으로 다시 실행하지 않습니다 · Core 확인 필요' } as Dict)[e];
 }
 export function propertyEvidence(event: string, r: MaplRequest): Dict {

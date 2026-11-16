@@ -160,6 +160,11 @@ test('requester helper uses stdin only and refuses non-test destinations and sta
  const opts={state,deployment,token,request};assert.deepEqual(await submit(opts),{status:200});
  for(const patch of [{origin:'https://mapl.visibly-fake-fixture.workers.dev'},{state:{...state,mode:'operational'}},{state:{...state,request:{...requestBody,mode:'operational'}}},{deployment:{...deployment,TEST_ROOT_ID:'e'.repeat(32)}},{state:{...state,request:{...requestBody,action_type:'credential_add/1'}}}])await assert.rejects(submit({...opts,...patch}));
  assert.equal(calls,1);
+ for(const purpose of ['v2','withdraw-target']) {
+  assert.deepEqual(await submit({...opts,state:{...state,device_requests:{[purpose]:requestBody}},purpose}),{status:200});
+ }
+ await assert.rejects(submit({...opts,purpose:'other'}));
+ await assert.rejects(submit({...opts,purpose:'v2'}));
  const dir=mkdtempSync(join(tmpdir(),'mapl-submit-fixture-'));
  try {
   mkdirSync(join(dir,'scripts'));for(const f of ['submit-request.mjs','configure.mjs'])writeFileSync(join(dir,'scripts',f),readFileSync('scripts/'+f));

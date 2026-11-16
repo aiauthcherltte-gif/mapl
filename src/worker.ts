@@ -1,3 +1,4 @@
+import { kst } from './state';
 import { canonical, parseJson } from './canonical';
 import { type Env, type DOState } from './platform';
 import { Store } from './store';
@@ -112,7 +113,7 @@ export class MaplApproval {
                 return new Response(canonical({ authenticated: false }), { headers: { ...HEADERS, 'Set-Cookie': '__Host-mapl_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0' } });
             }
             else if (method === 'GET' && path === '/api/requests') result = this.store.list();
-            else if (method === 'GET' && path === '/api/history') result = { history: this.store.meta('auth_history') ?? [] };
+            else if (method === 'GET' && path === '/api/history') result = { history: (this.store.meta<Dict[]>('auth_history') ?? []).map(e => ({ ...e, at_text: kst(e.at, true) })) };
             else if (method === 'POST' && path === '/api/credential-add/options') result = this.store.credentialAddOptions(session!);
             else if (method === 'POST' && path === '/api/credential-add/prepare') result = await this.store.credentialAddPrepare(session!, body.action_id, body.credential);
             else if (method === 'POST' && path === '/api/credential-add/verify') result = await this.store.credentialAddVerify(session!, body.action_id, body.credential);

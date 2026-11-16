@@ -1,7 +1,8 @@
+import { listRow } from './ui';
 import { FLOW_EVENTS } from './flow';
 import { approvalChallenge, b64decode, b64encode, canonical, contentHash, digest, sha256, utf8 } from './canonical';
 import { validate } from './request';
-import { display, expired, initial, stamp, transition, utc, type State } from './state';
+import { display, expired, initial, kst, stamp, transition, utc, type State } from './state';
 import { clone, need, type Dict, type MaplRequest } from './types';
 import { verifyAssertion, verifyRegistration, type Credential, type Facts } from './webauthn';
 import type { Env, Storage } from './platform';
@@ -89,10 +90,10 @@ export class Store {
     runnerStatus(): string {
         const stop = this.meta<string>('stopped_at'), contact = this.meta<string>('last_contact'), suffix = '켜짐·꺼짐은 이 정보만으로 알 수 없습니다';
         if (stop)
-            return '실행기가 꺼진다고 알림 ' + stop.slice(11, 19);
+            return '실행기가 꺼진다고 알림 ' + kst(stop, true);
         if (!contact)
             return 'Mac 실행기(모의) 연결 기록 없음 · ' + suffix;
-        return `Mac 실행기(모의) 마지막 연결 ${contact.slice(11, 19)} (${Math.max(0, Math.floor((this.clock() - utc(contact)) / 60000))}분 전) · ${suffix}`;
+        return `Mac 실행기(모의) 마지막 연결 ${kst(contact, true)} (${Math.max(0, Math.floor((this.clock() - utc(contact)) / 60000))}분 전) · ${suffix}`;
     }
     record(e: Entry): Dict {
         return { request: clone(e.request), ...clone(e.state), content_hash: e.content_hash, history: clone(e.history), display_state: display(e.state, e.request, this.clock()), server_now: stamp(this.clock()), runner_status: this.runnerStatus(), ...this.credentialSummary() };
@@ -167,7 +168,7 @@ export class Store {
             need(!this.credentials().some(x => x.id === c.id), 'credential_exists', 409);
             c.registered_at = stamp(this.clock()); this.putMeta('credential', c); this.putMeta('registration', null);
             this.audit('credential_registered', { credential_id: c.id, epoch });
-            return { ...this.credentialSummary(), registered_at: c.registered_at };
+            return { ...this.credentialSummary(), registered_at: c.registered_at, registered_at_text: kst(c.registered_at, true) };
         });
     }
     private cleanupAuthRows(): void {
@@ -270,7 +271,12 @@ export class Store {
             this.history(e, 'withdraw'); this.save(e); return this.record(e);
         });
     }
-    list(): Dict { return { ...this.credentialSummary(), last_response: this.meta<string>('last_contact')?.slice(11, 16) ?? null, requests: this.storage.sql.exec<{ rid: string }>('SELECT rid FROM latest').toArray().map(({ rid }) => this.get(rid)) }; }
+    list(): Dict {
+        const contact = this.meta<string>('last_contact');
+        const requests = this.storage.sql.exec<{ rid: string }>('SELECT rid FROM latest').toArray().map(({ rid }) => this.get(rid));
+        requests.sort((a, b) => utc(b.request.created_at) - utc(a.request.created_at) || a.request.request_id.localeCompare(b.request.request_id));
+        return { ...this.credentialSummary(), last_response: contact ? kst(contact) : null, requests: requests.map(record => ({ ...record, ...listRow(record) })) };
+    }
     credentialAddOptions(session: string): Dict {
         return this.storage.transactionSync(() => {
             this.requireSession(session);

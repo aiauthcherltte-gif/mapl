@@ -21,7 +21,7 @@ sys.path.insert(0, str(REPO))
 from planning.impl.mapl_test.isolation import TestRoot
 from planning.impl.mapl_test.mock_kit import MockKit
 from planning.impl.mapl_test.canonical import canonical_bytes, digest
-from planning.impl.mapl_test.seed import seed
+from planning.impl.mapl_test.seed import seed, seed_existing
 from planning.impl.mapl_cloudflare.runner import MacRunner
 from planning.impl.mapl_cloudflare.transport import HTTPSTransport
 
@@ -153,6 +153,43 @@ def reseed(state, data, clock):
     print(json.dumps({'request_id': request['request_id'], 'expires_at': request['expires_at']}))
 
 
+def device_request(state, data, purpose, clock):
+    """Keep each device-check request stable across submission retries.
+
+    Does not reseed or overwrite target bytes, prior manifests, or approval state.
+    Both requests bind the actual current generation before the next runner swap.
+    """
+    original = state.read_bytes()
+    if json.loads(original) != data:
+        raise ValueError('state changed')
+    root = TestRoot.reopen_for_runner_test(data['root'], data['root_id'])
+    instance, held = secrets.token_hex(16), False
+    try:
+        root.acquire_process_runner_lock(instance)
+        held = True
+        from planning.impl.mapl_test.request import validate, local_request
+        baseline = data['request']
+        validate(baseline, root)
+        if root.read_json('runner/manifests/' + baseline['request_id'] + '/1.json') != baseline:
+            raise ValueError('state manifest mismatch')
+        requests = dict(data.get('device_requests', {}))
+        if set(requests) - {'v2', 'withdraw-target'}:
+            raise ValueError('unexpected device requests')
+        if purpose not in requests:
+            requests[purpose] = seed_existing(root, Baseline(root), clock(), v2=purpose == 'v2')
+            data = {**data, 'device_requests': requests}
+            replace_public_state(state, original, data)
+        request = requests[purpose]
+        validate(request, root)
+        if (root.read_json('runner/manifests/' + request['request_id'] + '/1.json') != request
+                or canonical_bytes(local_request(root, request)) != canonical_bytes(request)):
+            raise ValueError('device request mismatch')
+        return data, request
+    finally:
+        if held: root.release_process_runner_lock(instance)
+        root.detach_runner_test()
+
+
 def mark_submission(data):
     root = TestRoot.reopen_for_runner_test(data['root'], data['root_id'])
     instance = secrets.token_hex(16)
@@ -160,7 +197,17 @@ def mark_submission(data):
     try:
         root.acquire_process_runner_lock(instance)
         held = True
-        root.write_json('runner/submission-attempted.json', {'request_id': data['request']['request_id']})
+        marker = {'request_id': data['request']['request_id']}
+        # Preserve the original submission guard byte-for-byte; retain each new
+        # request in its own exclusive marker, including failed/uncertain sends.
+        if not root.exists('runner/submission-attempted.json'):
+            root.write_json('runner/submission-attempted.json', marker, exclusive=True)
+        path = 'runner/submission-attempts/' + marker['request_id'] + '.json'
+        if root.exists(path):
+            if root.read_json(path) != marker:
+                raise ValueError('submission marker mismatch')
+        else:
+            root.write_json(path, marker, exclusive=True)
     finally:
         if held: root.release_process_runner_lock(instance)
         root.detach_runner_test()
@@ -168,7 +215,7 @@ def mark_submission(data):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['prepare', 'reseed', 'submit', 'start'])
+    parser.add_argument('action', choices=['prepare', 'reseed', 'submit', 'submit-v2', 'submit-withdraw-target', 'start'])
     parser.add_argument('--state', type=Path, required=True, help='public mock state metadata, outside sync')
     parser.add_argument('--token-dir', type=Path, default=Path(os.environ['MAPL_TOKEN_DIR']) if os.environ.get('MAPL_TOKEN_DIR') else None, help='private role token directory (0600 files)')
     parser.add_argument('--public-pin', type=Path, help='user-reviewed public credential JSON: id and spki only')
@@ -195,15 +242,22 @@ def main():
         return
     origin = configured_origin()
     if args.token_dir is None: parser.error('set MAPL_TOKEN_DIR or pass --token-dir')
-    role = 'requester' if args.action == 'submit' else 'runner'
+    submitting = args.action in ('submit', 'submit-v2', 'submit-withdraw-target')
+    role = 'requester' if submitting else 'runner'
     token_path = (args.token_dir / (role + '.token')).resolve()
     if not outside_sync(token_path) or stat.S_IMODE(token_path.stat().st_mode) != 0o600:
         parser.error('token file must be outside sync with mode 0600')
-    if args.action == 'submit':
-        mark_submission(data)
-        result = subprocess.run(['node', str(REPO / 'scripts/submit-request.mjs'), str(args.state)], input=token_path.read_text().strip(), text=True, capture_output=True, cwd=REPO)
+    if submitting:
+        purpose = {'submit-v2': 'v2', 'submit-withdraw-target': 'withdraw-target'}.get(args.action)
+        if purpose:
+            data, request = device_request(args.state, data, purpose, clock)
+        else:
+            request = data['request']
+        mark_submission({**data, 'request': request})
+        result = subprocess.run(['node', str(REPO / 'scripts/submit-request.mjs'), str(args.state)] + ([purpose] if purpose else []), input=token_path.read_text().strip(), text=True, capture_output=True, cwd=REPO)
         if result.returncode: raise ValueError('Test requester submission refused')
-        print('Test request submitted; approval still requires the user on iPhone.')
+        print(json.dumps({'request_id': request['request_id'], 'format': request['format'], 'purpose': purpose or 'original', 'expires_at': request['expires_at']}))
+        print('Test request submitted; approval and withdrawal require the user on iPhone.')
         return
     if not args.public_pin: parser.error('reviewed public key pin required')
     pin = json.loads(args.public_pin.read_text())

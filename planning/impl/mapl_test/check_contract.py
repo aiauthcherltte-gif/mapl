@@ -6,10 +6,12 @@ from .isolation import package_bytes
 from .state import utc
 
 # Synthetic swap-only kit declaration; this does not describe an operational kit.
-MOCK_K7 = {'scope': ['pointer_bytes', 'pinned_reader'], 'codes': {
+MOCK_K7 = {'scope': ['pointer_bytes', 'pinned_reader', 'collector', 'screen'], 'codes': {
     'CURRENT_IS_NOT_APPROVED_AFTER_BYTES': {'current_is_after': False, 'definite': True},
     'READER_INDEX_MISMATCH': {'current_is_after': True, 'definite': True},
-    'INPUT_CHANGED': {'current_is_after': True, 'definite': False}}, 'check_and_recover_max_s': 600}
+    'INPUT_CHANGED': {'current_is_after': True, 'definite': False},
+    'COLLECTOR_SCREEN_PENDING': {'current_is_after': True, 'definite': False,
+                                 'not_yet': ['collector', 'screen']}}, 'check_and_recover_max_s': 600}
 
 
 def descriptor(k7):
@@ -37,7 +39,9 @@ def check(root, request):
     data = root.read_bytes('bundles/' + request['target']['to_generation'] + '/data.json')
     if digest(data) != request['bundle']['sha256'] or kit_hash() != request['kit']['sha256']:
         return 3, 'STOP INPUT_CHANGED'
-    return 0, ''
+    # No collector or rendering adapter exists in this synthetic kit.
+    # A successful pointer/read check must never verify those signed scopes.
+    return 3, 'STOP COLLECTOR_SCREEN_PENDING'
 
 
 def recover(root, request, claim_id, clock, phase):

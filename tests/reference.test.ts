@@ -9,7 +9,7 @@ import strictRows from '../planning/impl/mapl_cloudflare/reference/strict-json-f
 import refusalRows from '../planning/impl/mapl_cloudflare/reference/refusal-fixed.json';
 import { canonical, canonicalBytes, hex, digest, approvalChallenge, parseJson } from '../src/canonical';
 import { validate } from '../src/request';
-import { display, initial, propertyEvidence, transition, utc, type State } from '../src/state';
+import { display, kst, initial, propertyEvidence, transition, utc, type State } from '../src/state';
 import { confirm, view, BAND } from '../src/ui';
 import { REFUSAL_CODES } from '../src/store';
 import { Refusal, type Dict, type MaplRequest } from '../src/types';
@@ -74,14 +74,23 @@ describe('W1 immutable oracle: all rows', () => {
             interned.set(seq.join(','), { state: next, now });
         }
     });
-    it('112 immutable v1 statuses; AF1 supersedes old screen layout', () => { expect(BAND).toBe(wording.band); for (const row of wording.cases) {
+    it('112 immutable v1 statuses; AF1 supersedes old screen layout', () => { expect(BAND).toBe(wording.band); let mapped = 0, unchanged = 0; for (const row of wording.cases) {
         const node = states.nodes[row.node], now = utc(node.now), text = display(node.state, base, now), record = { request: base, history: [{ at: base.created_at, event: 'create' }], runner_status: 'Mac 실행기(모의) 연결 기록 없음', credential_count: 0, display_state: text };
-        expect(text).toBe(row.display);
+        const pattern = /시작 보고 (\d\d:\d\d) \(/g;
+        const matches = [...row.display.matchAll(pattern)];
+        if (matches.length) {
+            expect(matches).toHaveLength(1);
+            expect(matches[0][1]).toBe(node.state.started_at!.slice(11, 16));
+            mapped++;
+        } else unchanged++;
+        const expected = (value: string) => value.replace(pattern, () => `시작 보고 ${kst(node.state.started_at!)} (`);
+        expect(text).toBe(expected(row.display));
         const current = view(record, now);
-        for (const field of ['title', 'change', 'state']) expect(current[field]).toBe(row.view[field as keyof typeof row.view]);
+        for (const field of ['title', 'change']) expect(current[field]).toBe(row.view[field as keyof typeof row.view]);
+        expect(current.state).toBe(expected(row.view.state));
         expect(current.failure).toContain('이 요청은 교체 뒤 확인을 하지 않습니다.');
         expect(confirm(record, 'https://mapl-test.invalid')).toBe(row.confirmation);
-    } });
+    } expect(mapped).toBe(4); expect(unchanged).toBe(108); });
     it('strict JSON fixed duplicate row', () => { for (const row of strictRows)
         expect(outcome(() => parseJson(row.raw))).toEqual(row.expected); });
     it('2 fixed refusal-code decisions', () => { for (const row of refusalRows)
